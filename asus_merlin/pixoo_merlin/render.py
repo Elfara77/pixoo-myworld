@@ -403,8 +403,23 @@ class FrameRenderer:
 
         if wid == "wan_ip":
             # Public WAN IP — continuous marquee right → left
+            # "IP" + dots cyan; digits green (same idea as clients widget)
             ip = (snap.wan_ip or "-").strip() or "-"
             msg = f"  IP {ip}   "
+
+            def _wan_ip_char_color(ch: str) -> Color:
+                if ch.isdigit():
+                    return GREEN
+                return CYAN
+
+            def _draw_colored_msg(target: ImageDraw.ImageDraw, ox: int, oy: int, text: str) -> None:
+                cx = ox
+                for ch in text:
+                    col = _wan_ip_char_color(ch)
+                    if ch != " ":
+                        target.text((cx, oy), ch, fill=col, font=self.font_sm)
+                    cx += _text_size(target, ch, self.font_sm)[0]
+
             tw, _ = _text_size(draw, msg, self.font_sm)
             band = Image.new("RGB", (64, 12), BG)
             bdraw = ImageDraw.Draw(band)
@@ -413,13 +428,13 @@ class FrameRenderer:
             # Scroll right → left (text drifts left continuously)
             x = -(int(anim * speed) % period)
             while x < 64 + tw:
-                bdraw.text((x, 1), msg, fill=CYAN, font=self.font_sm)
+                _draw_colored_msg(bdraw, x, 1, msg)
                 x += tw
             img = getattr(self, "_img", None)
             if img is not None:
                 img.paste(band, (0, y))
             else:
-                draw.text((PAD_X, y), f"IP {ip}"[:15], fill=CYAN, font=self.font_sm)
+                _draw_colored_msg(draw, PAD_X, y, f"IP {ip}"[:15])
             return y + ROW_TEXT
 
         if wid == "top_clients":
