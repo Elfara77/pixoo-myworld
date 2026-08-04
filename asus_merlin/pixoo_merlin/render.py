@@ -122,11 +122,25 @@ def _short_rate(v: float) -> str:
     return f"{v:.0f}k"
 
 
-def _short_rate_int(v: float) -> str:
-    """Integer-only rate for stats (no decimal point/comma)."""
+def _rate_int_parts(v: float) -> tuple[str, str]:
+    """Return (numeric, unit) for integer rate display."""
     if v >= 1000:
-        return f"{int(round(v / 1000))}M"
-    return f"{int(round(v))}k"
+        return f"{int(round(v / 1000))}", "M"
+    return f"{int(round(v))}", "k"
+
+
+def _stats_minmax(lo: float, hi: float, kind: str) -> tuple[str, str]:
+    """Format min/max; share unit on hi only when both sides match."""
+    if kind == "rate":
+        lo_n, lo_u = _rate_int_parts(lo)
+        hi_n, hi_u = _rate_int_parts(hi)
+        if lo_u == hi_u:
+            return lo_n, f"{hi_n}{hi_u}"
+        return f"{lo_n}{lo_u}", f"{hi_n}{hi_u}"
+    if kind == "temp":
+        return f"{int(round(lo))}", f"{int(round(hi))}C"
+    # pct — single trailing %
+    return f"{int(round(lo))}", f"{int(round(hi))}%"
 
 
 def _draw_bar(
@@ -262,12 +276,24 @@ class FrameRenderer:
             return y + ROW_TITLE
 
         if wid == "clients":
-            # Wired vs Wi‑Fi — UI label « WAN » = WLAN associated
+            # Wired vs Wi‑Fi — « WAN » = WLAN; digits green, labels cyan
             lan_n = int(snap.clients_lan)
             wan_n = int(snap.clients_wan)
-            text = f"{lan_n} LAN {wan_n} WAN"
-            x = _center_x(draw, text, self.font_sm)
-            draw.text((x, y), text, fill=FG, font=self.font_sm)
+            parts = [
+                (str(lan_n), GREEN),
+                ("LAN", CYAN),
+                (" ", FG),
+                (str(wan_n), GREEN),
+                ("WAN", CYAN),
+            ]
+            full = "".join(p for p, _ in parts)
+            x = _center_x(draw, full, self.font_sm)
+            for chunk, col in parts:
+                if chunk == " ":
+                    x += _text_size(draw, " ", self.font_sm)[0]
+                    continue
+                draw.text((x, y), chunk, fill=col, font=self.font_sm)
+                x += _text_size(draw, chunk, self.font_sm)[0]
             return y + ROW_CLIENTS
 
         if wid == "wan_rate":
@@ -397,40 +423,31 @@ class FrameRenderer:
             return y + ROW_TEXT
 
         if wid == "top_clients":
-            # Header + top 4 downloaders (1 red, 2–3 yellow, 4 gray)
-            c = tuple(min(255, int(v + 20 * abs(math.sin(anim * math.pi * 2)))) for v in CYAN)
-            title_col: Color = (int(c[0]), int(c[1]), int(c[2]))
-            hdr = "Internet"
-            x = _center_x(draw, hdr, self.font_sm)
-            draw.text((x, y), hdr, fill=title_col, font=self.font_sm)
-            yy = y + ROW_TITLE
+            # Top Down (2) then Top Up (2) — 1st red, 2nd yellow; no page title
+            yy = y
 
-            sub = "Top Dwn Clients"
-            sx = _center_x(draw, sub, self.font_sm)
-            draw.text((sx, yy), sub, fill=FG, font=self.font_sm)
-            yy += ROW_TEXT
+            def section(label: str, rows: Sequence, start_y: int) -> int:
+                lx = _center_x(draw, label, self.font_sm)
+                draw.text((lx, start_y), label, fill=FG, font=self.font_sm)
+                row_y = start_y + ROW_TEXT
+                if not rows:
+                    draw.text((PAD_X, row_y), "no data", fill=DIM, font=self.font_sm)
+                    return row_y + 10
+                for i, tc in enumerate(rows[:2], start=1):
+                    name = (tc.name or "?").replace("\n", " ")[:12]
+                    line = f"{i}.{name}"
+                    color = RED if i == 1 else YELLOW
+                    draw.text((PAD_X, row_y), line, fill=color, font=self.font_sm)
+                    row_y += 10
+                return row_y
 
-            rows = snap.top_clients[:4]
-            if not rows:
-                draw.text((PAD_X, yy), "no data", fill=DIM, font=self.font_sm)
-                return yy + ROW_TEXT
-            for i, tc in enumerate(rows, start=1):
-                name = (tc.name or "?").replace("\n", " ")[:12]
-                line = f"{i}.{name}"
-                if i == 1:
-                    color = RED
-                elif i <= 3:
-                    color = YELLOW
-                else:
-                    color = DIM
-                draw.text((PAD_X, yy), line, fill=color, font=self.font_sm)
-                yy += 10
-                if yy > 54:
-                    break
+            yy = section("Top Down", snap.top_clients, yy)
+            yy += 2
+            yy = section("Top Up", snap.top_up_clients, yy)
             return min(64, yy)
 
         if wid == "hour_stats":
-            # Header e.g. « 1h -> min-max » — color-coded min/max rows
+            # Header e.g. « 1h > Min-Max » — color-coded min/max rows
             hs = snap.hour_stats
             win = max(1, int(hs.window_s))
             if win % 3600 == 0:
@@ -439,7 +456,7 @@ class FrameRenderer:
                 win_s = f"{win // 60}m"
             else:
                 win_s = f"{win}s"
-            header = f"{win_s} -> min-max"
+            header = f"{win_s} > Min-Max"
             x = _center_x(draw, header, self.font_sm)
             draw.text((x, y), header, fill=CYAN, font=self.font_sm)
             yy = y + 9
@@ -452,12 +469,7 @@ class FrameRenderer:
                 accent: Color,
             ) -> None:
                 nonlocal yy
-                if kind == "rate":
-                    lo_s, hi_s = _short_rate_int(lo), _short_rate_int(hi)
-                elif kind == "temp":
-                    lo_s, hi_s = f"{int(round(lo))}", f"{int(round(hi))}C"
-                else:
-                    lo_s, hi_s = f"{int(round(lo))}%", f"{int(round(hi))}%"
+                lo_s, hi_s = _stats_minmax(lo, hi, kind)
                 draw.text((PAD_X, yy), label, fill=accent, font=self.font_sm)
                 draw.text((22, yy), lo_s, fill=accent, font=self.font_sm)
                 draw.text((40, yy), hi_s[:6], fill=accent, font=self.font_sm)

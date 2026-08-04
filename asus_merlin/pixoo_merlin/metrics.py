@@ -25,7 +25,8 @@ class BandwidthSample:
 @dataclass
 class TopClient:
     name: str
-    down_kbps: float
+    down_kbps: float = 0.0
+    up_kbps: float = 0.0
 
 
 @dataclass
@@ -66,6 +67,7 @@ class Snapshot:
     uptime_s: float = 0.0
     history: list[BandwidthSample] = field(default_factory=list)
     top_clients: list[TopClient] = field(default_factory=list)
+    top_up_clients: list[TopClient] = field(default_factory=list)
     hour_stats: HourStats = field(default_factory=HourStats)
     demo: bool = False
 
@@ -758,6 +760,7 @@ class MetricsCollector:
         history_seconds: int = 300,
         stats_seconds: int = 3600,
         top_clients: int = 5,
+        top_window_seconds: int = 60,
         disk_path: str = "",
         demo: bool = False,
     ) -> None:
@@ -766,14 +769,15 @@ class MetricsCollector:
         self.history_seconds = history_seconds
         self.stats_seconds = max(60, stats_seconds)
         self.top_n = max(1, min(8, top_clients))
+        self.top_window_seconds = max(5, int(top_window_seconds))
         self.disk_path = disk_path
         self.demo = demo
         self._hist: Deque[BandwidthSample] = deque()
         self._sys: Deque[_SysSample] = deque()
         self._prev_cpu: tuple[int, int] | None = None
         self._prev_net: tuple[float, int, int] | None = None  # ts, rx, tx
-        # mac -> (ts, tx_bytes)  tx = download to client from AP view
-        self._prev_sta: dict[str, tuple[float, int]] = {}
+        # mac -> rolling (ts, rx, tx) samples for top-client window average
+        self._sta_hist: dict[str, Deque[tuple[float, int, int]]] = {}
         self._demo_t0 = time.time()
 
     def _trim_history(self, now: float) -> None:
@@ -806,34 +810,57 @@ class MetricsCollector:
             ram_max=max(rams),
         )
 
-    def _top_download_clients(self, now: float) -> list[TopClient]:
-        """Rank Wi‑Fi clients by download (AP→STA tx bytes delta)."""
+    def _top_wifi_clients(self, now: float) -> tuple[list[TopClient], list[TopClient]]:
+        """Rank Wi‑Fi clients by avg download/upload over top_window_seconds."""
         _macs, names = _client_directory()
         assoc = _wifi_assoc_macs()
-        rates: list[tuple[str, float]] = []
+        win = float(self.top_window_seconds)
+        cut = now - win
+        seen: set[str] = set()
+        rates: list[tuple[str, float, float]] = []
 
         for mac, iface in assoc.items():
             info = _sta_info_traffic(iface, mac)
             if info is None:
                 continue
-            _rx, tx_bytes = info
-            prev = self._prev_sta.get(mac)
-            self._prev_sta[mac] = (now, tx_bytes)
-            if prev is not None:
-                pts, ptx = prev
-                dt = max(0.001, now - pts)
-                kbps = max(0.0, (tx_bytes - ptx) * 8.0 / 1000.0 / dt)
-            else:
-                # First tick: rank by cumulative tx until a delta exists
-                kbps = float(tx_bytes) / 1e9
-            rates.append((mac, kbps))
+            rx_bytes, tx_bytes = info
+            seen.add(mac)
+            hist = self._sta_hist.get(mac)
+            if hist is None:
+                hist = deque()
+                self._sta_hist[mac] = hist
+            hist.append((now, rx_bytes, tx_bytes))
+            while len(hist) > 1 and hist[0][0] < cut:
+                hist.popleft()
 
-        rates.sort(key=lambda x: x[1], reverse=True)
-        out: list[TopClient] = []
-        for mac, kbps in rates[: self.top_n]:
-            name = names.get(mac) or mac[-8:]
-            out.append(TopClient(name=name, down_kbps=max(0.0, kbps)))
-        return out
+            if len(hist) >= 2:
+                t0, rx0, tx0 = hist[0]
+                t1, rx1, tx1 = hist[-1]
+                dt = max(0.001, t1 - t0)
+                down_kbps = max(0.0, (tx1 - tx0) * 8.0 / 1000.0 / dt)
+                up_kbps = max(0.0, (rx1 - rx0) * 8.0 / 1000.0 / dt)
+            else:
+                # Warm-up: tiny seed until window has ≥2 samples
+                down_kbps = float(tx_bytes) / 1e9
+                up_kbps = float(rx_bytes) / 1e9
+            rates.append((mac, down_kbps, up_kbps))
+
+        # Drop histories for clients that left
+        for mac in list(self._sta_hist.keys()):
+            if mac not in seen:
+                del self._sta_hist[mac]
+
+        down_ranked = sorted(rates, key=lambda x: x[1], reverse=True)
+        up_ranked = sorted(rates, key=lambda x: x[2], reverse=True)
+
+        def build(ranked: list[tuple[str, float, float]]) -> list[TopClient]:
+            out: list[TopClient] = []
+            for mac, d_kbps, u_kbps in ranked[: self.top_n]:
+                name = names.get(mac) or mac[-8:]
+                out.append(TopClient(name=name, down_kbps=max(0.0, d_kbps), up_kbps=max(0.0, u_kbps)))
+            return out
+
+        return build(down_ranked), build(up_ranked)
 
     def _demo_snapshot(self) -> Snapshot:
         t = time.time() - self._demo_t0
@@ -846,12 +873,19 @@ class MetricsCollector:
         self._hist.append(BandwidthSample(now, down, up))
         self._sys.append(_SysSample(now, down, up, cpu, temp, ram))
         self._trim_history(now)
-        tops = [
-            TopClient("iPhone Anthime", 4200 + 200 * math.sin(t / 5)),
-            TopClient("Raph-Phone", 1800 + 100 * math.sin(t / 7)),
-            TopClient("Mac", 900 + 80 * math.sin(t / 9)),
-            TopClient("Nest-Audio", 120 + 20 * math.sin(t / 11)),
-            TopClient("PIXOO 64", 40 + 10 * math.sin(t / 13)),
+        tops_down = [
+            TopClient("iPhone Anthime", down_kbps=4200 + 200 * math.sin(t / 5), up_kbps=80),
+            TopClient("Raph-Phone", down_kbps=1800 + 100 * math.sin(t / 7), up_kbps=40),
+            TopClient("Mac", down_kbps=900 + 80 * math.sin(t / 9), up_kbps=200),
+            TopClient("Nest-Audio", down_kbps=120 + 20 * math.sin(t / 11), up_kbps=10),
+            TopClient("PIXOO 64", down_kbps=40 + 10 * math.sin(t / 13), up_kbps=5),
+        ]
+        tops_up = [
+            TopClient("Mac", down_kbps=900, up_kbps=420 + 40 * math.sin(t / 6)),
+            TopClient("iPhone Anthime", down_kbps=4200, up_kbps=180 + 20 * math.sin(t / 8)),
+            TopClient("Raph-Phone", down_kbps=1800, up_kbps=90 + 15 * math.sin(t / 10)),
+            TopClient("Nest-Audio", down_kbps=120, up_kbps=25),
+            TopClient("PIXOO 64", down_kbps=40, up_kbps=8),
         ]
         return Snapshot(
             clients=17,
@@ -874,7 +908,8 @@ class MetricsCollector:
             wan_ip="203.0.113.42",
             uptime_s=86400 * 3 + 3600 * 5 + 60 * 12,
             history=list(self._hist),
-            top_clients=tops[: self.top_n],
+            top_clients=tops_down[: self.top_n],
+            top_up_clients=tops_up[: self.top_n],
             hour_stats=self._hour_stats(),
             demo=True,
         )
@@ -924,6 +959,7 @@ class MetricsCollector:
         self._trim_history(now)
 
         total, lan_n, wifi_n = _client_lan_wan_counts()
+        top_down, top_up = self._top_wifi_clients(now)
 
         return Snapshot(
             clients=total,
@@ -946,7 +982,8 @@ class MetricsCollector:
             wan_ip=_wan_ip(),
             uptime_s=_uptime_s(),
             history=list(self._hist),
-            top_clients=self._top_download_clients(now),
+            top_clients=top_down,
+            top_up_clients=top_up,
             hour_stats=self._hour_stats(),
             demo=False,
         )

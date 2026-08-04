@@ -53,6 +53,7 @@ class Config:
     history_seconds: int = 300
     stats_seconds: int = 3600
     top_clients: int = 5
+    top_window_seconds: int = 60
     marquee_speed: float = 72.0
     sample_interval: float = 2.0
     disk_path: str = ""
@@ -102,6 +103,7 @@ def load_config(env_file: str | Path | None = None) -> Config:
         history_seconds=max(60, _int("HISTORY_SECONDS", 300)),
         stats_seconds=max(60, _int("STATS_SECONDS", 3600)),
         top_clients=max(1, min(8, _int("TOP_CLIENTS", 5))),
+        top_window_seconds=max(5, _int("TOP_WINDOW_SECONDS", 60)),
         marquee_speed=max(8.0, _float("MARQUEE_SPEED", 72.0)),
         sample_interval=max(1.0, _float("SAMPLE_INTERVAL", 2.0)),
         disk_path=(os.environ.get("DISK_PATH") or "").strip(),

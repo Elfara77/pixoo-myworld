@@ -23,6 +23,7 @@ class MerlinApp:
             history_seconds=config.history_seconds,
             stats_seconds=config.stats_seconds,
             top_clients=config.top_clients,
+            top_window_seconds=config.top_window_seconds,
             disk_path=config.disk_path,
             demo=config.demo,
         )
