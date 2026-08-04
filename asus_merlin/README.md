@@ -213,8 +213,13 @@ Au boot : ligne dans `/jffs/scripts/services-start`.
 ### Désinstallation
 
 ```sh
+# Sur le routeur uniquement — ne jamais lancer ./uninstall.sh depuis le clone Mac
 /jffs/addons/pixoo_merlin/uninstall.sh
+# ou depuis le Mac :
+# ssh elphara77@192.168.50.1 /jffs/addons/pixoo_merlin/uninstall.sh
 ```
+
+> **Attention :** `uninstall.sh` ne doit tourner **que sur Merlin**. Il refuse de s’exécuter sans `/jffs` et ne supprime que des chemins sous `/jffs/…` (un ancien bug prenait le dossier du script et pouvait effacer le clone local).
 
 Retire le daemon, le job **cru**, le hook `services-start`, puis **supprime entièrement** `/jffs/addons/pixoo_merlin/` (scripts, `pixoo_merlin/`, `setups/`, logs, …).  
 Une copie de `config.env` est aussi sauvée sous `/tmp/pixoo_merlin.config.env.bak`.  

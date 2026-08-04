@@ -23,10 +23,36 @@ fi
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 SELF="${SCRIPT_DIR}/$(basename "$0")"
 
-# Canonical install path; if invoked from a deployed tree, use that dir
-ADDON_DIR="${ADDON_DIR:-/jffs/addons/pixoo_merlin}"
+# ONLY ever delete the Merlin install path under /jffs — never the local git clone.
+# (Older logic set ADDON_DIR=$SCRIPT_DIR whenever watchdog.sh was present, which
+#  wiped ~/.../monitoring_pixoo64/asus_merlin when run on a Mac.)
+CANONICAL_ADDON="/jffs/addons/pixoo_merlin"
+ADDON_DIR="${ADDON_DIR:-$CANONICAL_ADDON}"
+
+case "${ADDON_DIR}" in
+  /jffs/*) ;;
+  *)
+    echo "error: refusing to uninstall outside /jffs (ADDON_DIR=${ADDON_DIR})" >&2
+    echo "  This script is for the Merlin router only." >&2
+    echo "  On the router: ${CANONICAL_ADDON}/uninstall.sh" >&2
+    echo "  From Mac: ssh user@router ${CANONICAL_ADDON}/uninstall.sh" >&2
+    exit 1
+    ;;
+esac
+
+# If invoked from the deployed tree on Merlin, prefer that path (still under /jffs)
 if [ -z "${UNINSTALL_REEXEC:-}" ] && [ -f "${SCRIPT_DIR}/watchdog.sh" ]; then
-  ADDON_DIR="${SCRIPT_DIR}"
+  case "${SCRIPT_DIR}" in
+    /jffs/*) ADDON_DIR="${SCRIPT_DIR}" ;;
+  esac
+fi
+
+# Refuse to run on a machine that has no /jffs (dev laptop)
+if [ ! -d /jffs ] && [ "${FORCE_UNINSTALL:-0}" != "1" ]; then
+  echo "error: /jffs not found — looks like you are not on the Merlin router." >&2
+  echo "  Do not run ./uninstall.sh from your Mac repo clone." >&2
+  echo "  Use: ssh user@router ${CANONICAL_ADDON}/uninstall.sh" >&2
+  exit 1
 fi
 
 # Re-exec from /tmp so rm -rf of the install dir cannot truncate this script mid-run
@@ -39,6 +65,7 @@ if [ "${UNINSTALL_REEXEC:-0}" != "1" ]; then
   export KEEP_CONFIG="${KEEP_CONFIG:-0}"
   export REMOVE_FILES="${REMOVE_FILES:-1}"
   export UNINSTALL_OPKG="${UNINSTALL_OPKG:-0}"
+  export FORCE_UNINSTALL="${FORCE_UNINSTALL:-0}"
   export PIXOO_UNINSTALL_TMP="${TMP_UNINSTALL}"
   export UNINSTALL_REEXEC=1
   exec /bin/sh "${TMP_UNINSTALL}"
@@ -96,6 +123,19 @@ if [ "${REMOVE_FILES}" = "1" ]; then
     CONFIG_BAK="/tmp/pixoo_merlin.config.env.bak"
     cp -f "${ADDON_DIR}/config.env" "${CONFIG_BAK}" 2>/dev/null || true
     echo "    config.env backed up to ${CONFIG_BAK}"
+  fi
+
+  # Final safety: never rm anything outside /jffs
+  case "${ADDON_DIR}" in
+    /jffs/*) ;;
+    *)
+      echo "error: refusing rm -rf outside /jffs (${ADDON_DIR})" >&2
+      exit 1
+      ;;
+  esac
+  if [ -z "${ADDON_DIR}" ] || [ "${ADDON_DIR}" = "/" ] || [ "${ADDON_DIR}" = "/jffs" ]; then
+    echo "error: refusing dangerous ADDON_DIR=${ADDON_DIR}" >&2
+    exit 1
   fi
 
   # Leave cwd outside the tree before deleting it
