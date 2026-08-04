@@ -1,0 +1,54 @@
+{
+  "name": "Prix Bitcoin",
+  "description": "Bitcoin EUR via CoinGecko",
+  "config": {
+    "sources": [
+      {
+        "id": "btc",
+        "label": "Bitcoin",
+        "plugin": "crypto",
+        "config": {
+          "exchange": "coingecko",
+          "symbol": "bitcoin",
+          "vs_currency": "eur",
+          "field": "all",
+          "cache_ttl": 60
+        },
+        "unit": "€",
+        "max_value": 200000
+      }
+    ],
+    "screens": [
+      {
+        "id": "scr_btc",
+        "title": "BTC",
+        "duration_s": 8,
+        "background": "#000000",
+        "elements": [
+          {
+            "id": "t1",
+            "type": "text",
+            "x": 2,
+            "y": 8,
+            "w": 60,
+            "h": 12,
+            "content": "BTC {btc.price:,.0f}e",
+            "color": "#FF6B00",
+            "animation": "none"
+          },
+          {
+            "id": "t2",
+            "type": "text",
+            "x": 2,
+            "y": 28,
+            "w": 60,
+            "h": 10,
+            "content": "{btc.change_24h:+.1f}% 24h",
+            "color": "#AAAAAA",
+            "animation": "none"
+          }
+        ]
+      }
+    ]
+  }
+}

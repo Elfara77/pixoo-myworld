@@ -13,6 +13,7 @@ from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDockWidget,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -32,13 +33,15 @@ from PySide6.QtWidgets import (
 
 from pixoo.common.config_manager import ConfigManager, ConfigError
 from pixoo.common.models import Project, Screen, default_project
+from pixoo.engine.data_fetcher import DataFetcher
 from pixoo.engine.renderer import Renderer
 from pixoo.plugins.base import get_registry
 from pixoo.studio.canvas import CanvasWidget
+from pixoo.studio.plugin_config_wizard import PluginConfigWizard
 from pixoo.studio.plugin_manager import PluginManagerWidget
 from pixoo.studio.properties_panel import PropertiesPanel
 from pixoo.studio.sync_client import SyncClient, VersionMismatchError
-
+from pixoo.studio.template_manager import TemplateManager
 logger = logging.getLogger("pixoo.studio")
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -59,10 +62,12 @@ class MainWindow(QMainWindow):
         )
         self.renderer = Renderer()
         self.registry = get_registry()
+        self.fetcher = DataFetcher(self.registry, persist_cache=False)
+        self.templates = TemplateManager()
         self.sync = SyncClient(
             f"http://{self.project.runtime.api_host}:{self.project.runtime.api_port}"
         )
-        self.values: dict[str, float | None] = {}
+        self.values: dict[str, Any] = {}
         self.current_screen_id: str | None = self.project.screens[0].id if self.project.screens else None
         self.current_element_id: str | None = None
         self._anim_t0 = time.monotonic()
@@ -71,8 +76,8 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_toolbar()
         self._build_menus()
+        self._build_sources_dock()
         self.setStatusBar(QStatusBar())
-
         self.anim_timer = QTimer(self)
         self.anim_timer.setInterval(max(33, int(1000 / max(5, self.project.runtime.ui_fps))))
         self.anim_timer.timeout.connect(self._refresh_preview)
@@ -204,6 +209,29 @@ class MainWindow(QMainWindow):
             act.triggered.connect(slot)
             act.setShortcut(shortcut)
             m.addAction(act)
+        src = self.menuBar().addMenu("&Sources")
+        act_add = QAction("Add source…", self)
+        act_add.triggered.connect(self._wizard_source)
+        src.addAction(act_add)
+        tpl = self.menuBar().addMenu("&Templates")
+        for info in self.templates.list_templates():
+            act = QAction(info["name"], self)
+            tid = info["id"]
+            act.triggered.connect(lambda _=False, i=tid: self._import_template(i))
+            tpl.addAction(act)
+
+    def _build_sources_dock(self) -> None:
+        dock = QDockWidget("Sources", self)
+        self.sources_list = QListWidget()
+        dock.setWidget(self.sources_list)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
+        row = QWidget()
+        hl = QHBoxLayout(row)
+        b_add = QPushButton("Add…")
+        b_add.clicked.connect(self._wizard_source)
+        hl.addWidget(b_add)
+        # keep button accessible via menu; dock shows status
+        self._refresh_sources_dock()
 
     # --------------------------------------------------------------- helpers
     def current_screen(self) -> Screen | None:
@@ -341,27 +369,55 @@ class MainWindow(QMainWindow):
 
     # ----------------------------------------------------------- data / draw
     def _fetch_local(self) -> None:
-        out: dict[str, float | None] = {}
-        for src in self.project.sources:
-            plug = self.registry.get(src.plugin)
-            if not plug or not plug.validate_config(src.config):
-                out[src.id] = self.values.get(src.id)
-                continue
-            try:
-                raw = plug.fetch_data(src.config)
-                num = plug.extract_numeric(raw)
-                out[src.id] = num if num is not None else self.values.get(src.id)
-                if num is not None:
-                    hist = self.project.history.setdefault(src.id, [])
-                    hist.append(num)
-                    if len(hist) > 200:
-                        del hist[:-200]
-            except Exception as exc:
-                logger.debug("fetch %s: %s", src.id, exc)
-                out[src.id] = self.values.get(src.id)
-        self.values = out
+        try:
+            self.values = self.fetcher.fetch_all(self.project)
+            for sid, val in self.values.items():
+                if isinstance(val, (int, float)) and not isinstance(val, bool) and "." not in sid:
+                    if any(s.id == sid for s in self.project.sources):
+                        hist = self.project.history.setdefault(sid, [])
+                        hist.append(float(val))
+                        if len(hist) > 200:
+                            del hist[:-200]
+        except Exception as exc:
+            logger.debug("fetch_all: %s", exc)
         online = self.sync.is_reachable()
         self.sync_label.setText("Engine: online" if online else "Engine: offline")
+        self._refresh_sources_dock()
+
+    def _refresh_sources_dock(self) -> None:
+        if not hasattr(self, "sources_list"):
+            return
+        self.sources_list.clear()
+        stats = self.fetcher.stats_snapshot()
+        for src in self.project.sources:
+            st = stats.get(src.id) or {}
+            ok = st.get("last_error") in (None, "")
+            led = "●" if ok and st else "○"
+            color_hint = "OK" if ok else "ERR"
+            ms = st.get("last_ms")
+            ms_s = f"{ms:.0f}ms" if isinstance(ms, (int, float)) else "—"
+            err = st.get("last_error") or ""
+            item = QListWidgetItem(f"{led} {src.id} [{src.plugin}] {color_hint} {ms_s} {err}")
+            self.sources_list.addItem(item)
+
+    def _wizard_source(self) -> None:
+        dlg = PluginConfigWizard(self)
+        if dlg.exec() and dlg.result_source():
+            src = dlg.result_source()
+            assert src is not None
+            self.project.sources = [s for s in self.project.sources if s.id != src.id] + [src]
+            self._refresh_sources_dock()
+            self.statusBar().showMessage(f"Added source {src.id}", 3000)
+
+    def _import_template(self, template_id: str) -> None:
+        try:
+            self.templates.apply_to_project(self.project, template_id, replace_screens=False)
+            self.current_screen_id = self.project.screens[-1].id if self.project.screens else None
+            self.reload_lists()
+            self._refresh_sources_dock()
+            self.statusBar().showMessage(f"Imported template {template_id}", 4000)
+        except Exception as exc:
+            QMessageBox.warning(self, "Template", str(exc))
 
     def _refresh_preview(self) -> None:
         scr = self.current_screen()
@@ -444,4 +500,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._engine_owned:
             self.sync.shutdown_engine()
+        try:
+            self.fetcher.close()
+        except Exception:
+            pass
         super().closeEvent(event)

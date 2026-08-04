@@ -1,0 +1,79 @@
+{
+  "name": "System monitor",
+  "description": "CPU / RAM / Disk gauges",
+  "config": {
+    "sources": [
+      {
+        "id": "system.cpu",
+        "label": "CPU",
+        "plugin": "system",
+        "config": {"key": "cpu"},
+        "unit": "%"
+      },
+      {
+        "id": "system.ram",
+        "label": "RAM",
+        "plugin": "system",
+        "config": {"key": "ram"},
+        "unit": "%"
+      },
+      {
+        "id": "system.disk",
+        "label": "Disk",
+        "plugin": "system",
+        "config": {"key": "disk"},
+        "unit": "%"
+      }
+    ],
+    "screens": [
+      {
+        "id": "scr_sys",
+        "title": "System",
+        "duration_s": 8,
+        "background": "#000000",
+        "elements": [
+          {
+            "id": "t1",
+            "type": "text",
+            "x": 2,
+            "y": 2,
+            "content": "CPU {system.cpu}%",
+            "color": "#3CC8FF",
+            "animation": "none"
+          },
+          {
+            "id": "g1",
+            "type": "gauge",
+            "x": 2,
+            "y": 16,
+            "w": 60,
+            "h": 8,
+            "source": "system.cpu",
+            "style": "bar",
+            "color": "#28DC64"
+          },
+          {
+            "id": "t2",
+            "type": "text",
+            "x": 2,
+            "y": 28,
+            "content": "RAM {system.ram}%",
+            "color": "#F0C828",
+            "animation": "none"
+          },
+          {
+            "id": "g2",
+            "type": "gauge",
+            "x": 2,
+            "y": 40,
+            "w": 60,
+            "h": 8,
+            "source": "system.ram",
+            "style": "bar",
+            "color": "#F0C828"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "name": "Météo Paris",
+  "description": "Température Open-Meteo pour Paris",
+  "config": {
+    "sources": [
+      {
+        "id": "weather",
+        "label": "Paris weather",
+        "plugin": "weather",
+        "config": {
+          "provider": "open-meteo",
+          "latitude": 48.85,
+          "longitude": 2.35,
+          "field": "all",
+          "cache_ttl": 300
+        },
+        "unit": "°C"
+      }
+    ],
+    "screens": [
+      {
+        "id": "scr_weather",
+        "title": "Météo",
+        "duration_s": 8,
+        "background": "#000000",
+        "elements": [
+          {
+            "id": "t1",
+            "type": "text",
+            "x": 2,
+            "y": 8,
+            "w": 60,
+            "h": 12,
+            "content": "{weather.temperature:.1f}°C",
+            "color": "#FFFFFF",
+            "animation": "none"
+          },
+          {
+            "id": "t2",
+            "type": "text",
+            "x": 2,
+            "y": 28,
+            "w": 60,
+            "h": 10,
+            "content": "code {weather.weathercode}",
+            "color": "#888888",
+            "animation": "none"
+          }
+        ]
+      }
+    ]
+  }
+}
