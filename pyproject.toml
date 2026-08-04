@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pixoo-monitor"
+version = "1.0.0"
+description = "Monitoring système Linux/macOS vers Divoom Pixoo 64"
+requires-python = ">=3.11"
+dependencies = [
+  "psutil>=6.0.0",
+  "pillow>=10.0.0",
+  "questionary>=2.0.0",
+  "rich>=13.0.0",
+]
+
+[project.scripts]
+pixoo-monitor = "pixoo_monitor.__main__:main"
+pixoo-monitor-setup = "pixoo_monitor.setup:main"
+pixoo-monitor-test = "pixoo_monitor.test_mode:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

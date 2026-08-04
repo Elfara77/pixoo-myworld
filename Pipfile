@@ -1,0 +1,21 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+pixoo-monitor = {editable = true, path = "."}
+psutil = ">=6.0.0"
+pillow = ">=10.0.0"
+questionary = ">=2.0.0"
+rich = ">=13.0.0"
+
+[dev-packages]
+
+[requires]
+python_version = "3.12"
+
+[scripts]
+monitor = "python -m pixoo_monitor"
+setup = "python -m pixoo_monitor.setup"
+test = "python -m pixoo_monitor.test_mode"
