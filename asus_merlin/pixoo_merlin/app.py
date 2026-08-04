@@ -23,6 +23,7 @@ class MerlinApp:
             history_seconds=config.history_seconds,
             stats_seconds=config.stats_seconds,
             top_clients=config.top_clients,
+            disk_path=config.disk_path,
             demo=config.demo,
         )
         self.client: PixooClient | None = None
@@ -62,8 +63,7 @@ class MerlinApp:
         screen_i = 0
         screen_t0 = time.monotonic()
         anim = 0.0
-        default_secs = self.setup.screen_seconds or self.config.screen_seconds
-
+        # Per-screen seconds > setup.screen_seconds > config SCREEN_SECONDS
         while True:
             loop_t0 = time.monotonic()
             snap = self.collector.sample()
@@ -73,7 +73,13 @@ class MerlinApp:
                 continue
             screen_i %= len(screens)
             sc = screens[screen_i]
-            secs = sc.seconds if sc.seconds is not None else default_secs
+            if sc.seconds is not None:
+                secs = float(sc.seconds)
+            elif self.setup.screen_seconds is not None:
+                secs = float(self.setup.screen_seconds)
+            else:
+                secs = float(self.config.screen_seconds)
+            secs = max(1.0, secs)
             if time.monotonic() - screen_t0 >= secs:
                 screen_i = (screen_i + 1) % len(screens)
                 screen_t0 = time.monotonic()

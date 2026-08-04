@@ -46,11 +46,17 @@ class HourStats:
 @dataclass
 class Snapshot:
     clients: int = 0
+    clients_lan: int = 0
+    clients_wan: int = 0  # Wi‑Fi / WLAN (label « WAN » on screen per UI request)
     wan_down_kbps: float = 0.0
     wan_up_kbps: float = 0.0
     cpu_pct: float = 0.0
     temp_c: float = 0.0
     ram_pct: float = 0.0
+    disk_pct: float = 0.0
+    disk_used_mb: float = 0.0
+    disk_total_mb: float = 0.0
+    disk_label: str = "disk"
     internet_ok: bool = False
     usb2: bool = False
     usb3: bool = False
@@ -162,6 +168,35 @@ def _ram_pct() -> float:
         avail = free + cached
     used = max(0, total - avail)
     return 100.0 * used / total
+
+
+def _disk_usage(path: str = "") -> tuple[float, float, float, str]:
+    """Native Merlin storage used/free → (pct_used, used_mb, total_mb, label).
+
+    Prefers /jffs (persistent), then /opt (Entware), then /.
+    """
+    candidates: list[str] = []
+    if path.strip():
+        candidates.append(path.strip())
+    candidates.extend(["/jffs", "/opt", "/"])
+    seen: set[str] = set()
+    for p in candidates:
+        if p in seen:
+            continue
+        seen.add(p)
+        try:
+            st = os.statvfs(p)
+        except OSError:
+            continue
+        total = st.f_blocks * st.f_frsize
+        free = st.f_bavail * st.f_frsize
+        if total <= 0:
+            continue
+        used = max(0, total - free)
+        pct = 100.0 * used / total
+        label = { "/jffs": "jffs", "/opt": "opt", "/": "root" }.get(p, Path(p).name or "disk")
+        return pct, used / (1024 * 1024), total / (1024 * 1024), label
+    return 0.0, 0.0, 0.0, "disk"
 
 
 def _temps_c() -> list[float]:
@@ -442,24 +477,80 @@ def _count_clients() -> int:
     return len(_client_directory()[0])
 
 
-def _sta_rx_tx(iface: str, mac: str) -> tuple[int, int] | None:
-    """Return (rx_bytes, tx_bytes) from wl sta_info — tx≈download to client."""
-    out = _run(f"wl -i {iface} sta_info {mac} 2>/dev/null", timeout=2.0)
+def _client_lan_wan_counts() -> tuple[int, int, int]:
+    """Return (total, lan_wired, wifi).
+
+    LAN = online clients not currently Wi‑Fi-associated.
+    WAN label on UI = Wi‑Fi associated clients (WLAN).
+    """
+    all_macs, _names = _client_directory()
+    wifi = _macs_from_wifi()
+    # Prefer assoclist-only for wifi count (true air clients)
+    wifi_n = len(wifi)
+    lan_n = len(all_macs - wifi)
+    # If NMP/all is empty but wifi has stations, still report wifi
+    total = max(len(all_macs), wifi_n + lan_n)
+    if not all_macs and wifi:
+        total = wifi_n
+        lan_n = 0
+    return total, lan_n, wifi_n
+
+
+def _sta_info_traffic(iface: str, mac: str) -> tuple[int, int] | None:
+    """Parse wl sta_info → (rx_bytes, tx_bytes).
+
+    Merlin/Broadcom format::
+      tx data bytes: 68730715
+      rx data bytes: 73557
+    """
+    mac_u = mac.upper()
+    out = _run(f"wl -i {iface} sta_info {mac_u} 2>/dev/null", timeout=2.5)
+    if not out:
+        out = _run(f"wl -i {iface} sta_info {mac} 2>/dev/null", timeout=2.5)
     if not out:
         return None
-    rx = tx = None
+
+    rx_ucast = rx_data = rx_total = None
+    tx_ucast = tx_data = tx_total = None
     for line in out.splitlines():
         ls = line.strip().lower()
-        # "rx data  12345" / "tx data  678"
-        m = re.match(r"rx data\s+(\d+)", ls)
-        if m:
-            rx = int(m.group(1))
-        m = re.match(r"tx data\s+(\d+)", ls)
-        if m:
-            tx = int(m.group(1))
+        try:
+            if ls.startswith("tx ucast bytes:"):
+                tx_ucast = int(ls.split(":", 1)[1].strip().split()[0])
+            elif ls.startswith("tx data bytes:"):
+                tx_data = int(ls.split(":", 1)[1].strip().split()[0])
+            elif ls.startswith("tx total bytes:"):
+                tx_total = int(ls.split(":", 1)[1].strip().split()[0])
+            elif ls.startswith("rx ucast bytes:"):
+                rx_ucast = int(ls.split(":", 1)[1].strip().split()[0])
+            elif ls.startswith("rx data bytes:"):
+                rx_data = int(ls.split(":", 1)[1].strip().split()[0])
+            elif ls.startswith("rx total bytes:"):
+                rx_total = int(ls.split(":", 1)[1].strip().split()[0])
+        except (IndexError, ValueError):
+            continue
+
+    def pick(*vals: int | None) -> int | None:
+        for v in vals:
+            if v is not None:
+                return v
+        return None
+
+    rx = pick(rx_ucast, rx_data, rx_total)
+    tx = pick(tx_ucast, tx_data, tx_total)
     if rx is None and tx is None:
         return None
     return (rx or 0, tx or 0)
+
+
+def _wifi_assoc_macs() -> dict[str, str]:
+    """mac → iface for currently associated Wi‑Fi stations."""
+    found: dict[str, str] = {}
+    for iface in _wl_client_ifaces():
+        assoc = _run(f"wl -i {iface} assoclist 2>/dev/null")
+        for m in _MAC_RE.findall(assoc or ""):
+            found[_norm_mac(m)] = iface
+    return found
 
 
 def _internet_ok(host: str) -> bool:
@@ -667,6 +758,7 @@ class MetricsCollector:
         history_seconds: int = 300,
         stats_seconds: int = 3600,
         top_clients: int = 5,
+        disk_path: str = "",
         demo: bool = False,
     ) -> None:
         self.wan_iface = detect_wan_iface(wan_iface) if not demo else (wan_iface or "eth0")
@@ -674,6 +766,7 @@ class MetricsCollector:
         self.history_seconds = history_seconds
         self.stats_seconds = max(60, stats_seconds)
         self.top_n = max(1, min(8, top_clients))
+        self.disk_path = disk_path
         self.demo = demo
         self._hist: Deque[BandwidthSample] = deque()
         self._sys: Deque[_SysSample] = deque()
@@ -714,34 +807,32 @@ class MetricsCollector:
         )
 
     def _top_download_clients(self, now: float) -> list[TopClient]:
-        macs, names = _client_directory()
+        """Rank Wi‑Fi clients by download (AP→STA tx bytes delta)."""
+        _macs, names = _client_directory()
+        assoc = _wifi_assoc_macs()
         rates: list[tuple[str, float]] = []
-        ifaces = _wl_client_ifaces()
-        for mac in macs:
-            tx_bytes = None
-            for iface in ifaces:
-                pair = _sta_rx_tx(iface, mac)
-                if pair is not None:
-                    _rx, tx = pair
-                    tx_bytes = tx
-                    break
-            if tx_bytes is None:
+
+        for mac, iface in assoc.items():
+            info = _sta_info_traffic(iface, mac)
+            if info is None:
                 continue
+            _rx, tx_bytes = info
             prev = self._prev_sta.get(mac)
             self._prev_sta[mac] = (now, tx_bytes)
-            if prev is None:
-                continue
-            pts, ptx = prev
-            dt = max(0.001, now - pts)
-            # bytes → kbps (download to client)
-            kbps = max(0.0, (tx_bytes - ptx) * 8.0 / 1000.0 / dt)
+            if prev is not None:
+                pts, ptx = prev
+                dt = max(0.001, now - pts)
+                kbps = max(0.0, (tx_bytes - ptx) * 8.0 / 1000.0 / dt)
+            else:
+                # First tick: rank by cumulative tx until a delta exists
+                kbps = float(tx_bytes) / 1e9
             rates.append((mac, kbps))
 
         rates.sort(key=lambda x: x[1], reverse=True)
         out: list[TopClient] = []
         for mac, kbps in rates[: self.top_n]:
             name = names.get(mac) or mac[-8:]
-            out.append(TopClient(name=name, down_kbps=kbps))
+            out.append(TopClient(name=name, down_kbps=max(0.0, kbps)))
         return out
 
     def _demo_snapshot(self) -> Snapshot:
@@ -764,11 +855,17 @@ class MetricsCollector:
         ]
         return Snapshot(
             clients=17,
+            clients_lan=4,
+            clients_wan=13,
             wan_down_kbps=down,
             wan_up_kbps=up,
             cpu_pct=cpu,
             temp_c=temp,
             ram_pct=ram,
+            disk_pct=62.0,
+            disk_used_mb=40.0,
+            disk_total_mb=64.0,
+            disk_label="jffs",
             internet_ok=(int(t) % 40) > 3,
             usb2=True,
             usb3=(int(t) % 60) > 10,
@@ -819,19 +916,28 @@ class MetricsCollector:
         temps = _temps_c()
         temp_c = sum(temps) / len(temps) if temps else 0.0
         ram_pct = _ram_pct()
+        disk_pct, disk_used, disk_total, disk_label = _disk_usage(self.disk_path)
         lan = _lan_port_links()
         u2, u3 = _usb_status()
 
         self._sys.append(_SysSample(now, down_kbps, up_kbps, cpu_pct, temp_c, ram_pct))
         self._trim_history(now)
 
+        total, lan_n, wifi_n = _client_lan_wan_counts()
+
         return Snapshot(
-            clients=_count_clients(),
+            clients=total,
+            clients_lan=lan_n,
+            clients_wan=wifi_n,
             wan_down_kbps=down_kbps,
             wan_up_kbps=up_kbps,
             cpu_pct=cpu_pct,
             temp_c=temp_c,
             ram_pct=ram_pct,
+            disk_pct=disk_pct,
+            disk_used_mb=disk_used,
+            disk_total_mb=disk_total,
+            disk_label=disk_label,
             internet_ok=_internet_ok(self.ping_host),
             usb2=u2,
             usb3=u3,

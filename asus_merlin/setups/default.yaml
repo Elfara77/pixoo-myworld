@@ -1,4 +1,9 @@
-# Default Pixoo Merlin layout — 5 animated screens
+# Default Pixoo Merlin layout — 6 animated screens
+#
+# Timing priority:
+#   1) screens[].seconds   (optional, this screen only)
+#   2) setup.screen_seconds (optional, all screens in this setup)
+#   3) SCREEN_SECONDS in config.env (global default)
 setup:
   title: Asus Merlin
   screen_seconds: 8.0
@@ -15,11 +20,13 @@ screens:
 
   - id: bandwidth
     enabled: true
+    seconds: 12
     widgets:
       - wan_graph
 
   - id: status
     enabled: true
+    seconds: 10
     widgets:
       - title
       - internet
@@ -36,5 +43,9 @@ screens:
   - id: hour_stats
     enabled: true
     widgets:
-      - title
       - hour_stats
+
+  - id: disk
+    enabled: true
+    widgets:
+      - disk_pie

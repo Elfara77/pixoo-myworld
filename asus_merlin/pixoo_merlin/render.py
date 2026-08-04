@@ -23,15 +23,40 @@ RED = (255, 70, 70)
 BAR_BG = (22, 26, 38)
 GRAPH_DOWN = (40, 190, 255)
 GRAPH_UP = (255, 130, 60)
+PIE_FREE = (40, 40, 55)
+PIE_USED = (40, 200, 120)
+# Upload is usually << download on a shared Y scale — boost visual amplitude
+UP_GRAPH_ZOOM = 5.0
 
 # Vertical rhythm (64px canvas)
 PAD_X = 2
 ROW_TITLE = 9
 ROW_TEXT = 10
-# Same-row gauges — bar-only rows are a bit taller for readability
+# Same-row gauges — fixed label column so RAM/CPU/Temp bars share left/right edges
 GAUGE_ROW = 11
 GAUGE_BAR_H = 6
 GAUGE_BAR_ONLY_H = 8
+GAUGE_LABEL_COL = 24  # px reserved for label; RAM/CPU/Temp bars share edges
+
+
+def _draw_pie(
+    draw: ImageDraw.ImageDraw,
+    cx: int,
+    cy: int,
+    radius: int,
+    pct: float,
+    color: Color,
+) -> None:
+    """Used/free pie — pct = % used."""
+    pct = max(0.0, min(100.0, pct))
+    bbox = [cx - radius, cy - radius, cx + radius, cy + radius]
+    draw.ellipse(bbox, outline=DIM, fill=PIE_FREE)
+    if pct >= 99.5:
+        draw.ellipse(bbox, fill=color, outline=DIM)
+    elif pct > 0.5:
+        extent = max(3, int(round(360.0 * pct / 100.0)))
+        draw.pieslice(bbox, start=-90, end=-90 + extent, fill=color, outline=color)
+    draw.ellipse(bbox, outline=DIM)
 
 
 def _font() -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
@@ -115,13 +140,11 @@ def _draw_gauge(
     font: ImageFont.ImageFont | None = None,
     label_color: Color | None = None,
 ) -> int:
-    """Bar with optional short label (RAM/CPU/45°C) left of the gauge."""
+    """Bar with optional label; bars share a fixed left/right alignment."""
     if label and font is not None:
         lc = label_color if label_color is not None else FG
         draw.text((PAD_X, y), label, fill=lc, font=font)
-        lw, _ = _text_size(draw, label, font)
-        gap = 3
-        bar_x = PAD_X + lw + gap
+        bar_x = PAD_X + GAUGE_LABEL_COL
         bar_h = GAUGE_BAR_H
         bar_y = y + 2
     else:
@@ -153,14 +176,15 @@ def _draw_graph(
     ups = [s.up_kbps for s in hist]
     peak = max(max(downs), max(ups), 1.0)
 
-    def series(vals: Sequence[float], color: Color) -> None:
+    def series(vals: Sequence[float], color: Color, *, y_zoom: float = 1.0) -> None:
         n = len(vals)
         pts: list[tuple[int, int]] = []
         scroll = int(anim * 2) % max(1, n // 20 + 1)
         for i, v in enumerate(vals):
             px = x + 1 + int((i / max(1, n - 1)) * (w - 2))
             px = min(x + w - 2, px + (1 if (i + scroll) % 7 == 0 else 0))
-            py = y + h - 2 - int((v / peak) * (h - 4))
+            frac = min(1.0, (v * y_zoom) / peak)
+            py = y + h - 2 - int(frac * (h - 4))
             py = max(y + 1, min(y + h - 2, py))
             pts.append((px, py))
         if len(pts) >= 2:
@@ -169,14 +193,14 @@ def _draw_graph(
             tx, ty = pts[-1]
             draw.point((tx, ty), fill=FG)
 
-    series(downs, GRAPH_DOWN)
-    series(ups, GRAPH_UP)
+    series(downs, GRAPH_DOWN, y_zoom=1.0)
+    series(ups, GRAPH_UP, y_zoom=UP_GRAPH_ZOOM)
 
 
 class FrameRenderer:
     """Renders one screen of a setup for a given animation phase."""
 
-    def __init__(self, setup: Setup, *, marquee_speed: float = 36.0) -> None:
+    def __init__(self, setup: Setup, *, marquee_speed: float = 72.0) -> None:
         self.setup = setup
         self.marquee_speed = marquee_speed
         self.font = _font()
@@ -213,11 +237,13 @@ class FrameRenderer:
             return y + ROW_TITLE
 
         if wid == "clients":
-            # Number only — matches Merlin client list count as closely as possible
-            text = str(int(snap.clients))
-            x = _center_x(draw, text, self.font)
-            draw.text((x, y + 2), text, fill=FG, font=self.font)
-            return y + 14
+            # Wired vs Wi‑Fi — UI label « WAN » = WLAN associated
+            lan_n = int(snap.clients_lan)
+            wan_n = int(snap.clients_wan)
+            text = f"{lan_n} LAN - {wan_n} WAN"
+            x = _center_x(draw, text, self.font_sm)
+            draw.text((x, y + 2), text, fill=FG, font=self.font_sm)
+            return y + ROW_TEXT
 
         if wid == "wan_rate":
             # Space-separated D / U (no slash / tiret)
@@ -325,7 +351,7 @@ class FrameRenderer:
         if wid == "wan_ip":
             # Public WAN IP — continuous marquee right → left
             ip = (snap.wan_ip or "-").strip() or "-"
-            msg = f"  {ip}  "
+            msg = f"  WAN IP {ip}   "
             tw, _ = _text_size(draw, msg, self.font_sm)
             band = Image.new("RGB", (64, 12), BG)
             bdraw = ImageDraw.Draw(band)
@@ -340,7 +366,7 @@ class FrameRenderer:
             if img is not None:
                 img.paste(band, (0, y))
             else:
-                draw.text((PAD_X, y), ip[:15], fill=CYAN, font=self.font_sm)
+                draw.text((PAD_X, y), f"WAN IP {ip}"[:15], fill=CYAN, font=self.font_sm)
             return y + ROW_TEXT
 
         if wid == "top_clients":
@@ -359,28 +385,66 @@ class FrameRenderer:
             return min(64, yy)
 
         if wid == "hour_stats":
+            # Header e.g. « 1h -> min-max » — color-coded min/max rows
             hs = snap.hour_stats
-            mins = max(1, int(hs.window_s // 60))
-            draw.text((PAD_X, y), f"{mins}m min/max", fill=CYAN, font=self.font_sm)
-            yy = y + 10
+            win = max(1, int(hs.window_s))
+            if win % 3600 == 0:
+                win_s = f"{win // 3600}h"
+            elif win % 60 == 0:
+                win_s = f"{win // 60}m"
+            else:
+                win_s = f"{win}s"
+            header = f"{win_s} -> min-max"
+            x = _center_x(draw, header, self.font_sm)
+            draw.text((x, y), header, fill=CYAN, font=self.font_sm)
+            yy = y + 9
 
-            def row(label: str, lo: float, hi: float, kind: str) -> None:
+            def row(
+                label: str,
+                lo: float,
+                hi: float,
+                kind: str,
+                accent: Color,
+            ) -> None:
                 nonlocal yy
                 if kind == "rate":
-                    line = f"{label} {_short_rate(lo)}-{_short_rate(hi)}"
+                    lo_s, hi_s = _short_rate(lo), _short_rate(hi)
                 elif kind == "temp":
-                    line = f"{label} {lo:.0f}-{hi:.0f}C"
+                    lo_s, hi_s = f"{lo:.0f}", f"{hi:.0f}C"
                 else:
-                    line = f"{label} {lo:.0f}-{hi:.0f}%"
-                draw.text((PAD_X, yy), line[:16], fill=FG, font=self.font_sm)
+                    lo_s, hi_s = f"{lo:.0f}%", f"{hi:.0f}%"
+                draw.text((PAD_X, yy), label, fill=accent, font=self.font_sm)
+                draw.text((22, yy), lo_s, fill=DIM, font=self.font_sm)
+                draw.text((40, yy), hi_s[:6], fill=accent, font=self.font_sm)
                 yy += 9
 
-            row("Dwn", hs.down_min, hs.down_max, "rate")
-            row("Up", hs.up_min, hs.up_max, "rate")
-            row("CPU", hs.cpu_min, hs.cpu_max, "pct")
-            row("T", hs.temp_min, hs.temp_max, "temp")
-            row("RAM", hs.ram_min, hs.ram_max, "pct")
+            t_hi = hs.temp_max
+            t_col = RED if t_hi >= 80 else (YELLOW if t_hi >= 65 else CYAN)
+            row("Dwn", hs.down_min, hs.down_max, "rate", GRAPH_DOWN)
+            row("Up", hs.up_min, hs.up_max, "rate", GRAPH_UP)
+            row("CPU", hs.cpu_min, hs.cpu_max, "pct", _bar_color(hs.cpu_max))
+            row("T", hs.temp_min, hs.temp_max, "temp", t_col)
+            row("RAM", hs.ram_min, hs.ram_max, "pct", _bar_color(hs.ram_max))
             return min(64, yy)
+
+        if wid == "disk_pie":
+            # Native storage pie (jffs/opt/root) — used vs free
+            pct = snap.disk_pct
+            color = _bar_color(pct)
+            label = (snap.disk_label or "disk").upper()
+            title = f"{label} {pct:.0f}%"
+            x = _center_x(draw, title, self.font_sm)
+            draw.text((x, y), title, fill=CYAN, font=self.font_sm)
+            _draw_pie(draw, 32, 34, 18, pct, color)
+            used = snap.disk_used_mb
+            total = snap.disk_total_mb
+            if total >= 1024:
+                foot = f"{used/1024:.1f}/{total/1024:.1f}G"
+            else:
+                foot = f"{used:.0f}/{total:.0f}M"
+            fx = _center_x(draw, foot, self.font_sm)
+            draw.text((fx, 54), foot, fill=DIM, font=self.font_sm)
+            return 64
 
         if wid == "uptime":
             up = format_uptime(snap.uptime_s)
@@ -396,6 +460,6 @@ def render_screen(
     snap: Snapshot,
     anim: float = 0.0,
     *,
-    marquee_speed: float = 36.0,
+    marquee_speed: float = 72.0,
 ) -> Image.Image:
     return FrameRenderer(setup, marquee_speed=marquee_speed).render(screen, snap, anim)

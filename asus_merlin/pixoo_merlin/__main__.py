@@ -84,12 +84,37 @@ def cmd_show_setup(args: argparse.Namespace) -> int:
     setup = load_setup(args.name, _root())
     print(f"setup: {setup.name}")
     print(f"title: {setup.title}")
-    print(f"screen_seconds: {setup.screen_seconds}")
+    ss = setup.screen_seconds
+    print(f"screen_seconds: {ss if ss is not None else '(config.env SCREEN_SECONDS)'}")
     if setup.path:
         print(f"path: {setup.path}")
     for i, sc in enumerate(setup.screens, 1):
         flag = "on " if sc.enabled else "off"
-        print(f"  [{flag}] {i}. {sc.id}: {', '.join(sc.widgets)}")
+        dur = f"{sc.seconds:g}s" if sc.seconds is not None else "default"
+        print(f"  [{flag}] {i}. {sc.id} ({dur}): {', '.join(sc.widgets)}")
+    return 0
+
+
+def cmd_screen(args: argparse.Namespace) -> int:
+    from .setups import set_screen_enabled, set_screen_seconds
+
+    if args.action == "seconds":
+        raw = args.seconds
+        if raw is None:
+            raise ValueError("screen seconds requires a value (or 0 to clear override)")
+        sec: float | None
+        if float(raw) <= 0:
+            sec = None
+        else:
+            sec = float(raw)
+        setup = set_screen_seconds(args.setup, args.screen, sec, _root())
+        shown = "default" if sec is None else f"{sec:g}s"
+        print(f"{setup.name}: screen {args.screen} → {shown}")
+        return 0
+
+    enabled = args.action == "enable"
+    setup = set_screen_enabled(args.setup, args.screen, enabled, _root())
+    print(f"{setup.name}: screen {args.screen} → {'enabled' if enabled else 'disabled'}")
     return 0
 
 
@@ -98,15 +123,6 @@ def cmd_copy_setup(args: argparse.Namespace) -> int:
 
     path = copy_setup(args.src, args.dst, _root())
     print(f"copied {args.src} → {path}")
-    return 0
-
-
-def cmd_screen(args: argparse.Namespace) -> int:
-    from .setups import set_screen_enabled
-
-    enabled = args.action == "enable"
-    setup = set_screen_enabled(args.setup, args.screen, enabled, _root())
-    print(f"{setup.name}: screen {args.screen} → {'enabled' if enabled else 'disabled'}")
     return 0
 
 

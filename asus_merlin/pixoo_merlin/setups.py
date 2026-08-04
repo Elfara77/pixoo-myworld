@@ -32,6 +32,7 @@ WIDGETS = (
     "uptime",
     "top_clients",
     "hour_stats",
+    "disk_pie",
 )
 
 DEFAULT_SETUP_NAME = "default"
@@ -49,7 +50,8 @@ class ScreenDef:
 class Setup:
     name: str
     title: str = "Asus Merlin"
-    screen_seconds: float = 8.0
+    # None → fall back to config.env SCREEN_SECONDS at runtime
+    screen_seconds: float | None = None
     screens: list[ScreenDef] = field(default_factory=list)
     path: Path | None = None
 
@@ -92,6 +94,8 @@ def _normalize_widgets(raw: Any) -> list[str]:
         "top_dl": "top_clients",
         "stats": "hour_stats",
         "minmax": "hour_stats",
+        "disk": "disk_pie",
+        "pie": "disk_pie",
     }
     for w in items:
         if not w:
@@ -136,10 +140,16 @@ def load_setup(name: str, root: Path | None = None) -> Setup:
     screens = [
         _parse_screen(s if isinstance(s, dict) else {}, i) for i, s in enumerate(screens_raw)
     ]
+    raw_ss = meta.get("screen_seconds", data.get("screen_seconds"))
+    screen_seconds: float | None
+    if raw_ss is None or raw_ss == "":
+        screen_seconds = None
+    else:
+        screen_seconds = float(raw_ss)
     return Setup(
         name=name,
         title=str(meta.get("title") or data.get("title") or "Asus Merlin"),
-        screen_seconds=float(meta.get("screen_seconds") or data.get("screen_seconds") or 8.0),
+        screen_seconds=screen_seconds,
         screens=screens,
         path=path,
     )
@@ -161,7 +171,11 @@ def write_setup(setup: Setup, root: Path | None = None) -> Path:
     payload = {
         "setup": {
             "title": setup.title,
-            "screen_seconds": float(setup.screen_seconds),
+            **(
+                {"screen_seconds": float(setup.screen_seconds)}
+                if setup.screen_seconds is not None
+                else {}
+            ),
         },
         "screens": [
             {
@@ -245,6 +259,37 @@ def set_widget_enabled(
     return setup
 
 
+def set_screen_seconds(
+    name: str,
+    screen_id: str,
+    seconds: float | None,
+    root: Path | None = None,
+) -> Setup:
+    """Set per-screen duration (None clears override → use setup/config default)."""
+    setup = load_setup(name, root)
+    found = False
+    for sc in setup.screens:
+        if sc.id == screen_id or sc.id.lower() == screen_id.lower():
+            sc.seconds = float(seconds) if seconds is not None else None
+            if sc.seconds is not None and sc.seconds < 1.0:
+                sc.seconds = 1.0
+            found = True
+            break
+    if not found and screen_id.isdigit():
+        idx = int(screen_id) - 1
+        if 0 <= idx < len(setup.screens):
+            sc = setup.screens[idx]
+            sc.seconds = float(seconds) if seconds is not None else None
+            if sc.seconds is not None and sc.seconds < 1.0:
+                sc.seconds = 1.0
+            found = True
+    if not found:
+        ids = ", ".join(s.id for s in setup.screens)
+        raise KeyError(f"Screen {screen_id!r} not in setup {name!r} ({ids})")
+    write_setup(setup, root)
+    return setup
+
+
 def ensure_default_setup(root: Path | None = None) -> Path:
     """Write default.yaml if missing (full multi-screen layout)."""
     path = setups_dir(root) / f"{DEFAULT_SETUP_NAME}.yaml"
@@ -256,10 +301,11 @@ def ensure_default_setup(root: Path | None = None) -> Path:
         screen_seconds=8.0,
         screens=[
             ScreenDef(id="overview", enabled=True, widgets=["title", "clients", "ram", "cpu", "temp"]),
-            ScreenDef(id="bandwidth", enabled=True, widgets=["wan_graph"]),
-            ScreenDef(id="status", enabled=True, widgets=["title", "internet", "wan_ip", "usb", "ethernet"]),
+            ScreenDef(id="bandwidth", enabled=True, seconds=12.0, widgets=["wan_graph"]),
+            ScreenDef(id="status", enabled=True, seconds=10.0, widgets=["title", "internet", "wan_ip", "usb", "ethernet"]),
             ScreenDef(id="top_dl", enabled=True, widgets=["title", "top_clients"]),
-            ScreenDef(id="hour_stats", enabled=True, widgets=["title", "hour_stats"]),
+            ScreenDef(id="hour_stats", enabled=True, widgets=["hour_stats"]),
+            ScreenDef(id="disk", enabled=True, widgets=["disk_pie"]),
         ],
     )
     return write_setup(setup, root)

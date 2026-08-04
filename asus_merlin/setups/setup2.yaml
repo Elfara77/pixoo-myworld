@@ -36,5 +36,9 @@ screens:
   - id: hour_stats
     enabled: false
     widgets:
-      - title
       - hour_stats
+
+  - id: disk
+    enabled: false
+    widgets:
+      - disk_pie
