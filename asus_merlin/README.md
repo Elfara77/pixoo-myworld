@@ -136,10 +136,10 @@ Les layouts sont des fichiers YAML dans `setups/` :
 ### `default` — layout complet (5 écrans)
 
 1. **overview** — titre, nb clients (chiffre seul, liste Merlin/NMP), jauges `RAM`/`CPU` + temp `NN°C`  
-2. **bandwidth** — `D` haut-gauche, `U` bas-droite, graphe au milieu  
+2. **bandwidth** — `Dwn` haut-gauche, `Up` bas-droite, graphe au milieu  
 3. **status** — online/offline, IP WAN (marquee rapide), USB2/USB3, `LAN1234` (LAN en cyan titre)  
 4. **top_dl** — top clients en download (`1.iPhone…`, `2.Raph-Phone`…)  
-5. **hour_stats** — min/max D/U, CPU, temp, RAM sur `STATS_SECONDS` (défaut 1 h)  
+5. **hour_stats** — min/max Dwn/Up, CPU, temp, RAM sur `STATS_SECONDS` (défaut 1 h)  
 
 ### `setup2` — écran overview seul
 

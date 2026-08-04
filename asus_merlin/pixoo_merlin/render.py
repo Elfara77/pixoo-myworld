@@ -223,7 +223,7 @@ class FrameRenderer:
             # Space-separated D / U (no slash / tiret)
             d = _short_rate(snap.wan_down_kbps)
             u = _short_rate(snap.wan_up_kbps)
-            text = f"D {d}  U {u}"
+            text = f"Dwn {d}  Up {u}"
             x = _center_x(draw, text, self.font_sm)
             draw.text((x, y), text, fill=ORANGE, font=self.font_sm)
             return y + ROW_TEXT
@@ -270,8 +270,8 @@ class FrameRenderer:
             # D top-left, U bottom-right; graph in the middle without overlapping text
             d = _short_rate(snap.wan_down_kbps)
             u = _short_rate(snap.wan_up_kbps)
-            d_label = f"D {d}"
-            u_label = f"U {u}"
+            d_label = f"Dwn {d}"
+            u_label = f"Up {u}"
             text_h = 10
             top_y = 2
             bot_y = 64 - text_h - 1
@@ -323,7 +323,7 @@ class FrameRenderer:
             return y + ROW_TEXT
 
         if wid == "wan_ip":
-            # Public WAN IP — continuous fast marquee left → right
+            # Public WAN IP — continuous marquee right → left
             ip = (snap.wan_ip or "-").strip() or "-"
             msg = f"  {ip}  "
             tw, _ = _text_size(draw, msg, self.font_sm)
@@ -331,7 +331,8 @@ class FrameRenderer:
             bdraw = ImageDraw.Draw(band)
             period = max(1, tw + 64)
             speed = max(8.0, self.marquee_speed)
-            x = int(anim * speed) % period - tw
+            # Scroll right → left (text drifts left continuously)
+            x = -(int(anim * speed) % period)
             while x < 64 + tw:
                 bdraw.text((x, 1), msg, fill=CYAN, font=self.font_sm)
                 x += tw
@@ -374,8 +375,8 @@ class FrameRenderer:
                 draw.text((PAD_X, yy), line[:16], fill=FG, font=self.font_sm)
                 yy += 9
 
-            row("D", hs.down_min, hs.down_max, "rate")
-            row("U", hs.up_min, hs.up_max, "rate")
+            row("Dwn", hs.down_min, hs.down_max, "rate")
+            row("Up", hs.up_min, hs.up_max, "rate")
             row("CPU", hs.cpu_min, hs.cpu_max, "pct")
             row("T", hs.temp_min, hs.temp_max, "temp")
             row("RAM", hs.ram_min, hs.ram_max, "pct")
