@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from typing import Any
 
 from PIL import Image, ImageDraw
@@ -13,7 +12,6 @@ from pixoo.common.models import Project, Screen
 from pixoo.utils.fonts import get_font, preload_fonts
 
 SIZE = 64
-_PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z0-9_.]+)\}")
 
 
 def _hex(color: str, default: tuple[int, int, int] = (255, 255, 255)) -> tuple[int, int, int]:
@@ -26,20 +24,11 @@ def _hex(color: str, default: tuple[int, int, int] = (255, 255, 255)) -> tuple[i
     return default
 
 
-def substitute_placeholders(text: str, values: dict[str, float | None]) -> str:
-    """Replace {system.cpu} style tokens with numeric values (safe, no eval)."""
+def substitute_placeholders(text: str, values: dict[str, Any]) -> str:
+    """Replace tags via shared data_binding resolver."""
+    from pixoo.studio.data_binding import resolve_tags
 
-    def repl(match: re.Match[str]) -> str:
-        key = match.group(1)
-        val = values.get(key)
-        if val is None:
-            return "—"
-        if abs(val - round(val)) < 1e-6:
-            return str(int(round(val)))
-        return f"{val:.1f}"
-
-    return _PLACEHOLDER_RE.sub(repl, text)
-
+    return resolve_tags(text, values)
 
 class FrameCache:
     def __init__(self, max_entries: int = 48) -> None:
@@ -75,12 +64,17 @@ class Renderer:
         self.cache = FrameCache()
         preload_fonts()
 
-    def cache_key(self, screen: Screen, values: dict[str, float | None], anim_t: float) -> str:
+    def cache_key(self, screen: Screen, values: dict[str, Any], anim_t: float) -> str:
+        def _norm(v: Any) -> Any:
+            if isinstance(v, float):
+                return round(v, 2)
+            return v
+
         payload = {
             "id": screen.id,
             "els": screen.elements,
             "bg": screen.background,
-            "vals": {k: None if v is None else round(float(v), 2) for k, v in values.items()},
+            "vals": {k: _norm(v) for k, v in values.items()},
             "anim": int(anim_t * 15),
         }
         return hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
@@ -89,7 +83,7 @@ class Renderer:
         self,
         screen: Screen,
         project: Project,
-        values: dict[str, float | None],
+        values: dict[str, Any],
         *,
         anim_t: float = 0.0,
         use_cache: bool = True,
@@ -117,7 +111,7 @@ class Renderer:
         img: Image.Image,
         el: dict[str, Any],
         project: Project,
-        values: dict[str, float | None],
+        values: dict[str, Any],
         anim_t: float,
     ) -> None:
         etype = str(el.get("type") or "text")
@@ -136,9 +130,28 @@ class Renderer:
             self._draw_pattern(draw, el)
 
     def _source_value(
-        self, source: str, project: Project, values: dict[str, float | None]
+        self, source: str, project: Project, values: dict[str, Any]
     ) -> tuple[float | None, float, float]:
-        val = values.get(source)
+        raw = values.get(source)
+        val: float | None
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            val = float(raw)
+        elif isinstance(raw, str):
+            try:
+                val = float(raw.strip().rstrip("%"))
+            except ValueError:
+                val = None
+        elif isinstance(raw, dict):
+            val = None
+            for key in ("value", "price", "temperature"):
+                if key in raw:
+                    try:
+                        val = float(raw[key])
+                        break
+                    except (TypeError, ValueError):
+                        pass
+        else:
+            val = None
         vmin, vmax = 0.0, 100.0
         for s in project.sources:
             if s.id == source:
@@ -147,7 +160,6 @@ class Renderer:
         if val is None and project.history.get(source):
             val = project.history[source][-1]
         return val, vmin, vmax
-
     def _pct(self, val: float | None, vmin: float, vmax: float) -> float:
         if val is None:
             return 0.0
@@ -159,7 +171,7 @@ class Renderer:
         draw: ImageDraw.ImageDraw,
         img: Image.Image,
         el: dict[str, Any],
-        values: dict[str, float | None],
+        values: dict[str, Any],
         anim_t: float,
     ) -> None:
         content = substitute_placeholders(str(el.get("content") or ""), values)
@@ -193,7 +205,7 @@ class Renderer:
         draw: ImageDraw.ImageDraw,
         el: dict[str, Any],
         project: Project,
-        values: dict[str, float | None],
+        values: dict[str, Any],
     ) -> None:
         source = str(el.get("source") or "system.cpu")
         val, vmin, vmax = self._source_value(source, project, values)
@@ -225,7 +237,7 @@ class Renderer:
         draw: ImageDraw.ImageDraw,
         el: dict[str, Any],
         project: Project,
-        values: dict[str, float | None],
+        values: dict[str, Any],
     ) -> None:
         source = str(el.get("source") or "system.cpu")
         hist = list(project.history.get(source) or [])

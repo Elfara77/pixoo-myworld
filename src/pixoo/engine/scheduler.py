@@ -12,6 +12,7 @@ from typing import Any
 from PIL import Image
 
 from pixoo.common.models import Project
+from pixoo.engine.data_fetcher import DataFetcher
 from pixoo.engine.renderer import Renderer
 from pixoo.plugins.base import PluginRegistry, get_registry
 
@@ -38,8 +39,9 @@ class Scheduler:
         self.project = project
         self.registry = registry or get_registry()
         self.renderer = Renderer()
+        self.fetcher = DataFetcher(self.registry)
         self.stats = EngineStats()
-        self._values: dict[str, float | None] = {}
+        self._values: dict[str, Any] = {}
         self._last_hash: str | None = None
         self._last_frame: Image.Image | None = None
         self._screen_index = 0
@@ -47,36 +49,27 @@ class Scheduler:
         self._last_push_mono = 0.0
         self._anim_t0 = time.monotonic()
         self._failures = 0
+        self.registry.start_streaming(self.project.sources)
 
-    def fetch_values(self) -> dict[str, float | None]:
-        try:
-            import psutil
-
-            psutil.cpu_percent(interval=None)
-        except Exception:
-            pass
-        out: dict[str, float | None] = {}
-        for src in self.project.sources:
-            plugin = self.registry.get(src.plugin)
-            if plugin is None or not plugin.validate_config(src.config):
-                out[src.id] = self._values.get(src.id)
+    def fetch_values(self) -> dict[str, Any]:
+        out = self.fetcher.fetch_all(self.project)
+        for sid, val in out.items():
+            if isinstance(val, bool):
                 continue
-            try:
-                raw = plugin.fetch_data(src.config)
-                num = plugin.extract_numeric(raw)
-                if num is None and isinstance(raw, (int, float)):
-                    num = float(raw)
-                if num is None:
-                    num = self._values.get(src.id)
-                else:
-                    hist = self.project.history.setdefault(src.id, [])
+            num: float | None = None
+            if isinstance(val, (int, float)):
+                num = float(val)
+            elif isinstance(val, str):
+                try:
+                    num = float(val.strip().rstrip("%"))
+                except ValueError:
+                    num = None
+            if num is not None and "." not in sid:
+                if any(s.id == sid for s in self.project.sources):
+                    hist = self.project.history.setdefault(sid, [])
                     hist.append(num)
                     if len(hist) > 200:
                         del hist[:-200]
-                out[src.id] = num
-            except Exception as exc:
-                logger.error("Source %s failed: %s", src.id, exc)
-                out[src.id] = self._values.get(src.id)
         self._values = out
         return out
 
@@ -113,7 +106,6 @@ class Scheduler:
         if time.monotonic() - self._last_push_mono < interval:
             return False
         h = self.frame_hash(image)
-        # Always allow push when animating (hash changes) or first frame
         if self._last_hash is None or h != self._last_hash:
             return True
         return False
@@ -152,7 +144,13 @@ class Scheduler:
         return frame
 
     def reload_project(self, project: Project) -> None:
+        self.registry.stop_all()
         self.project = project
         self.renderer.cache.clear()
         self._last_hash = None
+        self.registry.start_streaming(self.project.sources)
         logger.info("Project reloaded: %s", project.meta.name)
+
+    def shutdown(self) -> None:
+        self.registry.stop_all()
+        self.fetcher.close()

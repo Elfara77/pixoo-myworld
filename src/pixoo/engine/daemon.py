@@ -66,12 +66,13 @@ class EngineDaemon:
             self._stop.set()
             if self._thread:
                 self._thread.join(timeout=2)
+            self.scheduler.shutdown()
 
     def stop(self) -> None:
         self._stop.set()
         if self._server is not None:
             self._server.should_exit = True
-
+        self.scheduler.shutdown()
 
 def run_daemon(project_path: str | Path, *, pixoo_ip: str | None = None, host: str = "127.0.0.1", port: int = 8765) -> None:
     project = ConfigManager.load(project_path)
