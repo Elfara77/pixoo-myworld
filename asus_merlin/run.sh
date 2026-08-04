@@ -2,6 +2,15 @@
 # Foreground runner — always python3 (never "python").
 set -eu
 
+# Resolve install root BEFORE Entware profile (profile.d may cd to USB mount).
+_case0=$0
+case "${_case0}" in
+  /*) _script=${_case0} ;;
+  *) _script="$(pwd)/${_case0}" ;;
+esac
+ROOT="$(CDPATH= cd -- "$(dirname "${_script}")" && pwd)"
+unset _case0 _script
+
 # Entware: non-interactive / cru shells often skip profile
 export PATH="/opt/bin:/opt/sbin:/opt/usr/bin:${PATH}"
 if [ -f /opt/etc/profile ]; then
@@ -14,7 +23,6 @@ if [ -z "${PYTHON}" ] && [ -x /opt/bin/python3 ]; then
   PYTHON="/opt/bin/python3"
 fi
 
-ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 cd "${ROOT}"
 
 if [ -f "${ROOT}/config.env" ]; then

@@ -81,28 +81,31 @@ if [ ! -d "${SRC}/pixoo_merlin" ]; then
 fi
 echo "==> source package ${SRC}"
 
-echo "==> deploy files to ${ADDON_DIR}"
 mkdir -p "${ADDON_DIR}"
-# Copy package + setups + helpers (preserve structure)
-# Prefer tar to keep permissions; fall back to cp
-if command -v tar >/dev/null 2>&1; then
-  tar -C "${SRC}" -cf - \
-    pixoo_merlin setups \
-    run.sh watchdog.sh uninstall.sh config.example.env README.md \
-    2>/dev/null | tar -C "${ADDON_DIR}" -xf - 
+if [ "${SRC}" = "${ADDON_DIR}" ]; then
+  echo "==> already in place at ${ADDON_DIR} (skip copy)"
 else
-  cp -a "${SRC}/pixoo_merlin" "${ADDON_DIR}/"
-  cp -a "${SRC}/setups" "${ADDON_DIR}/"
-  cp -f "${SRC}/run.sh" "${SRC}/watchdog.sh" "${SRC}/uninstall.sh" "${ADDON_DIR}/"
-  cp -f "${SRC}/config.example.env" "${ADDON_DIR}/"
-  [ -f "${SRC}/README.md" ] && cp -f "${SRC}/README.md" "${ADDON_DIR}/"
+  echo "==> deploy files to ${ADDON_DIR}"
+  # Copy package + setups + helpers (preserve structure)
+  # Prefer tar to keep permissions; fall back to cp
+  if command -v tar >/dev/null 2>&1; then
+    tar -C "${SRC}" -cf - \
+      pixoo_merlin setups \
+      run.sh watchdog.sh uninstall.sh config.example.env README.md \
+      2>/dev/null | tar -C "${ADDON_DIR}" -xf -
+  else
+    cp -a "${SRC}/pixoo_merlin" "${ADDON_DIR}/"
+    cp -a "${SRC}/setups" "${ADDON_DIR}/"
+    cp -f "${SRC}/run.sh" "${SRC}/watchdog.sh" "${SRC}/uninstall.sh" "${ADDON_DIR}/"
+    cp -f "${SRC}/config.example.env" "${ADDON_DIR}/"
+    [ -f "${SRC}/README.md" ] && cp -f "${SRC}/README.md" "${ADDON_DIR}/"
+  fi
+  # Keep a copy of install.sh too
+  cp -f "${SRC}/install.sh" "${ADDON_DIR}/install.sh" 2>/dev/null || true
 fi
 
 # Ensure helpers executable
 chmod 755 "${ADDON_DIR}/run.sh" "${ADDON_DIR}/watchdog.sh" "${ADDON_DIR}/uninstall.sh" 2>/dev/null || true
-chmod 755 "${ADDON_DIR}/install.sh" 2>/dev/null || true
-# Keep a copy of install.sh too
-cp -f "${SRC}/install.sh" "${ADDON_DIR}/install.sh" 2>/dev/null || true
 chmod 755 "${ADDON_DIR}/install.sh" 2>/dev/null || true
 
 if [ ! -f "${ADDON_DIR}/config.env" ]; then

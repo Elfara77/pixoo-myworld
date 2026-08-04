@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-def _load_dotenv(path: Path) -> None:
+def _load_dotenv(path: Path, *, override: bool = False) -> None:
     if not path.is_file():
         return
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -17,7 +17,9 @@ def _load_dotenv(path: Path) -> None:
         key, _, val = line.partition("=")
         key = key.strip()
         val = val.strip().strip("'").strip('"')
-        if key and key not in os.environ:
+        if not key:
+            continue
+        if override or key not in os.environ:
             os.environ[key] = val
 
 
@@ -64,20 +66,35 @@ class Config:
 
 def load_config(env_file: str | Path | None = None) -> Config:
     root = Path(__file__).resolve().parent.parent
-    candidates = []
+    # Explicit files win over ambient env (stale PIXOO_IP from profile / old shell).
+    primary: list[Path] = []
     if env_file:
-        candidates.append(Path(env_file))
-    candidates.extend(
-        [
-            Path(os.environ.get("PIXOO_MERLIN_ENV", "")),
-            root / "config.env",
-            root / ".env",
-            Path.cwd() / "config.env",
-        ]
-    )
-    for p in candidates:
-        if p and str(p):
-            _load_dotenv(p)
+        primary.append(Path(env_file))
+    merlin_env = (os.environ.get("PIXOO_MERLIN_ENV") or "").strip()
+    if merlin_env:
+        primary.append(Path(merlin_env))
+    primary.append(root / "config.env")
+    primary.append(root / ".env")
+
+    seen: set[Path] = set()
+    for p in primary:
+        try:
+            rp = p.resolve()
+        except OSError:
+            rp = p
+        if rp in seen or not p.is_file():
+            continue
+        seen.add(rp)
+        _load_dotenv(p, override=True)
+
+    # Optional cwd config only fills missing keys (dev convenience)
+    cwd_env = Path.cwd() / "config.env"
+    if cwd_env.is_file():
+        try:
+            if cwd_env.resolve() not in seen:
+                _load_dotenv(cwd_env, override=False)
+        except OSError:
+            _load_dotenv(cwd_env, override=False)
 
     ip = (os.environ.get("PIXOO_IP") or os.environ.get("PIXOO_MERLIN_IP") or "").strip()
     demo = _bool("DEMO") or _bool("PIXOO_MERLIN_DEMO")
