@@ -248,8 +248,22 @@ def _norm_mac(mac: str) -> str:
     return mac.strip().lower()
 
 
+# Cache radio iface list — nvram storms every sample are expensive on Merlin.
+_WL_IFACES_CACHE: list[str] | None = None
+_WL_IFACES_CACHE_TS = 0.0
+_WL_IFACES_TTL = 60.0
+
+# Hard cap: wl sta_info is heavy; never probe every station every second.
+_MAX_STA_INFO_PER_REFRESH = 12
+
+
 def _wl_client_ifaces() -> list[str]:
     """All wireless interfaces including guest VIFs."""
+    global _WL_IFACES_CACHE, _WL_IFACES_CACHE_TS
+    now = time.monotonic()
+    if _WL_IFACES_CACHE is not None and (now - _WL_IFACES_CACHE_TS) < _WL_IFACES_TTL:
+        return _WL_IFACES_CACHE
+
     found: list[str] = []
     seen: set[str] = set()
     keys = (
@@ -269,6 +283,8 @@ def _wl_client_ifaces() -> list[str]:
                 if part.startswith(("wl", "eth", "ath")):
                     seen.add(part)
                     found.append(part)
+    _WL_IFACES_CACHE = found
+    _WL_IFACES_CACHE_TS = now
     return found
 
 
@@ -506,9 +522,8 @@ def _sta_info_traffic(iface: str, mac: str) -> tuple[int, int] | None:
       rx data bytes: 73557
     """
     mac_u = mac.upper()
-    out = _run(f"wl -i {iface} sta_info {mac_u} 2>/dev/null", timeout=2.5)
-    if not out:
-        out = _run(f"wl -i {iface} sta_info {mac} 2>/dev/null", timeout=2.5)
+    # One attempt with canonical uppercase MAC (wl expects AA:BB:…).
+    out = _run(f"wl -i {iface} sta_info {mac_u} 2>/dev/null", timeout=1.5)
     if not out:
         return None
 
@@ -762,6 +777,7 @@ class MetricsCollector:
         top_clients: int = 5,
         top_window_seconds: int = 60,
         disk_path: str = "",
+        sample_interval: float = 5.0,
         demo: bool = False,
     ) -> None:
         self.wan_iface = detect_wan_iface(wan_iface) if not demo else (wan_iface or "eth0")
@@ -771,6 +787,10 @@ class MetricsCollector:
         self.top_n = max(1, min(8, top_clients))
         self.top_window_seconds = max(5, int(top_window_seconds))
         self.disk_path = disk_path
+        self.sample_interval = max(2.0, float(sample_interval))
+        # sta_info is the expensive path — never faster than 5s, and backs off on failures.
+        self._sta_min_interval = max(5.0, self.sample_interval)
+        self._ping_min_interval = 30.0
         self.demo = demo
         self._hist: Deque[BandwidthSample] = deque()
         self._sys: Deque[_SysSample] = deque()
@@ -779,6 +799,16 @@ class MetricsCollector:
         # mac -> rolling (ts, rx, tx) samples for top-client window average
         self._sta_hist: dict[str, Deque[tuple[float, int, int]]] = {}
         self._demo_t0 = time.time()
+        self._last_sta_mono = 0.0
+        self._cached_top: tuple[list[TopClient], list[TopClient]] = ([], [])
+        self._sta_fail_streak = 0
+        self._sta_backoff_until = 0.0
+        self._last_ping_mono = 0.0
+        self._cached_internet = False
+        self._last_temp_mono = 0.0
+        self._cached_temp = 0.0
+        self._last_clients_mono = 0.0
+        self._cached_clients = (0, 0, 0)
 
     def _trim_history(self, now: float) -> None:
         cut = now - self.history_seconds
@@ -811,20 +841,38 @@ class MetricsCollector:
         )
 
     def _top_wifi_clients(self, now: float) -> tuple[list[TopClient], list[TopClient]]:
-        """Rank Wi‑Fi clients by avg download/upload over top_window_seconds."""
+        """Rank Wi‑Fi clients by avg download/upload over top_window_seconds.
+
+        Rate-limited: ``wl sta_info`` per client can stall radios / CPU on Merlin
+        if called every frame for dozens of stations.
+        """
+        mono = time.monotonic()
+        if mono < self._sta_backoff_until:
+            return self._cached_top
+        if self._last_sta_mono and (mono - self._last_sta_mono) < self._sta_min_interval:
+            return self._cached_top
+
         _macs, names = _client_directory()
         assoc = _wifi_assoc_macs()
         win = float(self.top_window_seconds)
         cut = now - win
-        seen: set[str] = set()
         rates: list[tuple[str, float, float]] = []
+        failures = 0
 
-        for mac, iface in assoc.items():
+        # Prefer previously tracked heavy talkers, then remaining assoc stations.
+        preferred = [m for m in self._sta_hist.keys() if m in assoc]
+        rest = [m for m in assoc.keys() if m not in self._sta_hist]
+        ordered = preferred + rest
+
+        for mac in ordered[:_MAX_STA_INFO_PER_REFRESH]:
+            iface = assoc.get(mac)
+            if not iface:
+                continue
             info = _sta_info_traffic(iface, mac)
             if info is None:
+                failures += 1
                 continue
             rx_bytes, tx_bytes = info
-            seen.add(mac)
             hist = self._sta_hist.get(mac)
             if hist is None:
                 hist = deque()
@@ -847,8 +895,19 @@ class MetricsCollector:
 
         # Drop histories for clients that left
         for mac in list(self._sta_hist.keys()):
-            if mac not in seen:
+            if mac not in assoc:
                 del self._sta_hist[mac]
+
+        self._last_sta_mono = mono
+        if failures and not rates:
+            self._sta_fail_streak += 1
+            # Exponential backoff up to 60s when driver/shell probes fail.
+            backoff = min(60.0, self._sta_min_interval * (2 ** min(4, self._sta_fail_streak)))
+            self._sta_backoff_until = mono + backoff
+            return self._cached_top
+
+        self._sta_fail_streak = 0
+        self._sta_backoff_until = 0.0
 
         down_ranked = sorted(rates, key=lambda x: x[1], reverse=True)
         up_ranked = sorted(rates, key=lambda x: x[2], reverse=True)
@@ -860,7 +919,8 @@ class MetricsCollector:
                 out.append(TopClient(name=name, down_kbps=max(0.0, d_kbps), up_kbps=max(0.0, u_kbps)))
             return out
 
-        return build(down_ranked), build(up_ranked)
+        self._cached_top = (build(down_ranked), build(up_ranked))
+        return self._cached_top
 
     def _demo_snapshot(self) -> Snapshot:
         t = time.time() - self._demo_t0
@@ -948,8 +1008,12 @@ class MetricsCollector:
                     cpu_pct = max(0.0, min(100.0, cpu_pct))
             self._prev_cpu = (idle, total)
 
-        temps = _temps_c()
-        temp_c = sum(temps) / len(temps) if temps else 0.0
+        mono = time.monotonic()
+        if not self._last_temp_mono or (mono - self._last_temp_mono) >= max(5.0, self.sample_interval):
+            temps = _temps_c()
+            self._cached_temp = sum(temps) / len(temps) if temps else 0.0
+            self._last_temp_mono = mono
+        temp_c = self._cached_temp
         ram_pct = _ram_pct()
         disk_pct, disk_used, disk_total, disk_label = _disk_usage(self.disk_path)
         lan = _lan_port_links()
@@ -958,8 +1022,15 @@ class MetricsCollector:
         self._sys.append(_SysSample(now, down_kbps, up_kbps, cpu_pct, temp_c, ram_pct))
         self._trim_history(now)
 
-        total, lan_n, wifi_n = _client_lan_wan_counts()
+        if not self._last_clients_mono or (mono - self._last_clients_mono) >= self.sample_interval:
+            self._cached_clients = _client_lan_wan_counts()
+            self._last_clients_mono = mono
+        total, lan_n, wifi_n = self._cached_clients
         top_down, top_up = self._top_wifi_clients(now)
+
+        if not self._last_ping_mono or (mono - self._last_ping_mono) >= self._ping_min_interval:
+            self._cached_internet = _internet_ok(self.ping_host)
+            self._last_ping_mono = mono
 
         return Snapshot(
             clients=total,
@@ -974,7 +1045,7 @@ class MetricsCollector:
             disk_used_mb=disk_used,
             disk_total_mb=disk_total,
             disk_label=disk_label,
-            internet_ok=_internet_ok(self.ping_host),
+            internet_ok=self._cached_internet,
             usb2=u2,
             usb3=u3,
             eth_linked=sum(1 for up in lan if up),

@@ -25,6 +25,7 @@ class MerlinApp:
             top_clients=config.top_clients,
             top_window_seconds=config.top_window_seconds,
             disk_path=config.disk_path,
+            sample_interval=config.sample_interval,
             demo=config.demo,
         )
         self.client: PixooClient | None = None
@@ -63,11 +64,17 @@ class MerlinApp:
         snap = warm_sample(self.collector, pause=0.5)
         screen_i = 0
         screen_t0 = time.monotonic()
+        sample_t0 = time.monotonic()
         anim = 0.0
+        # Expensive Merlin probes (wl sta_info, nvram, ping) follow SAMPLE_INTERVAL.
+        # FRAME_INTERVAL only drives Pixoo animation/push so we never DOS the router.
+        sample_every = max(2.0, float(self.config.sample_interval))
         # Per-screen seconds > setup.screen_seconds > config SCREEN_SECONDS
         while True:
             loop_t0 = time.monotonic()
-            snap = self.collector.sample()
+            if time.monotonic() - sample_t0 >= sample_every:
+                snap = self.collector.sample()
+                sample_t0 = time.monotonic()
             screens = self.setup.enabled_screens()
             if not screens:
                 time.sleep(self.config.frame_interval)

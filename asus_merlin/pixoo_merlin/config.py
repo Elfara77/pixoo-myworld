@@ -55,7 +55,7 @@ class Config:
     top_clients: int = 5
     top_window_seconds: int = 60
     marquee_speed: float = 72.0
-    sample_interval: float = 2.0
+    sample_interval: float = 5.0
     disk_path: str = ""
     demo: bool = False
     save_preview: str = ""
@@ -105,7 +105,8 @@ def load_config(env_file: str | Path | None = None) -> Config:
         top_clients=max(1, min(8, _int("TOP_CLIENTS", 5))),
         top_window_seconds=max(5, _int("TOP_WINDOW_SECONDS", 60)),
         marquee_speed=max(8.0, _float("MARQUEE_SPEED", 72.0)),
-        sample_interval=max(1.0, _float("SAMPLE_INTERVAL", 2.0)),
+        # Floor at 2s — sub-second sampling + wl sta_info storms can wedge Merlin.
+        sample_interval=max(2.0, _float("SAMPLE_INTERVAL", 5.0)),
         disk_path=(os.environ.get("DISK_PATH") or "").strip(),
         demo=demo,
         save_preview=(os.environ.get("SAVE_PREVIEW") or "").strip(),
