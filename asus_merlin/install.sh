@@ -6,6 +6,16 @@
 # Requires Entware (opkg). Uses python3 — package "python" does NOT exist.
 set -eu
 
+# Resolve package source BEFORE sourcing Entware profile — profile.d scripts
+# (e.g. mydisk.sh) may cd to /tmp/mnt/AMTM and would break relative $0 → SRC.
+_case0=$0
+case "${_case0}" in
+  /*) _script=${_case0} ;;
+  *) _script="$(pwd)/${_case0}" ;;
+esac
+SRC="$(CDPATH= cd -- "$(dirname "${_script}")" && pwd)"
+unset _case0 _script
+
 # Entware: non-interactive SSH often skips profile, so opkg/python3 are missing from PATH
 export PATH="/opt/bin:/opt/sbin:/opt/usr/bin:${PATH}"
 if [ -f /opt/etc/profile ]; then
@@ -64,8 +74,12 @@ fi
 
 echo "==> using ${PYTHON} ($("${PYTHON}" --version 2>&1))"
 
-# Resolve source directory (folder containing this script)
-SRC="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+if [ ! -d "${SRC}/pixoo_merlin" ]; then
+  echo "error: package not found at ${SRC}/pixoo_merlin" >&2
+  echo "  Run install from /jffs/addons/pixoo_merlin after upload_to_merlin.sh" >&2
+  exit 1
+fi
+echo "==> source package ${SRC}"
 
 echo "==> deploy files to ${ADDON_DIR}"
 mkdir -p "${ADDON_DIR}"

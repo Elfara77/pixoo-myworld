@@ -147,7 +147,8 @@ REMOTE_ENV="export PATH=/opt/bin:/opt/sbin:/opt/usr/bin:\$PATH; [ -f /opt/etc/pr
 
 if [[ "${DO_INSTALL}" -eq 1 ]]; then
   echo "==> remote install.sh (opkg python3 python3-pillow python3-yaml)"
-  "${SSH[@]}" "${TARGET}" "${REMOTE_ENV}; cd '${REMOTE_PATH}' && ./install.sh"
+  # Absolute path: Entware profile.d may cd away from REMOTE_PATH
+  "${SSH[@]}" "${TARGET}" "${REMOTE_ENV}; sh '${REMOTE_PATH}/install.sh'"
   echo ""
   echo "Next: edit config if needed:"
   echo "  ssh ${TARGET} vi ${REMOTE_PATH}/config.env"

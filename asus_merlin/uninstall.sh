@@ -6,7 +6,28 @@
 #   KEEP_CONFIG=1     preserve config.env (recreate dir with only that file)
 #   REMOVE_FILES=0    skip deleting the addon directory
 #   UNINSTALL_OPKG=1  also opkg remove python3 / pillow / yaml
+#
+# Prefer invoking from outside the install tree to avoid parent-shell getcwd
+# errors after rm -rf:
+#   cd / && /jffs/addons/pixoo_merlin/uninstall.sh
 set -eu
+
+# Resolve script path BEFORE Entware profile — profile.d (mydisk.sh) may cd
+# to /tmp/mnt/AMTM and would break relative $0.
+_case0=$0
+case "${_case0}" in
+  /*) _script=${_case0} ;;
+  *) _script="$(pwd)/${_case0}" ;;
+esac
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "${_script}")" && pwd)"
+SELF="${SCRIPT_DIR}/$(basename "${_script}")"
+# Parent/session cwd before we move (for getcwd warning after rm -rf)
+INVOKER_PWD="$(pwd -P 2>/dev/null || pwd 2>/dev/null || echo "")"
+unset _case0 _script
+
+# Leave any doomed cwd immediately (helps this process; parent shell may still
+# need `cd /` after we delete the install tree).
+cd /tmp 2>/dev/null || cd / || true
 
 # Entware: non-interactive SSH often skips profile
 export PATH="/opt/bin:/opt/sbin:/opt/usr/bin:${PATH}"
@@ -14,14 +35,13 @@ if [ -f /opt/etc/profile ]; then
   # shellcheck disable=SC1091
   . /opt/etc/profile
 fi
+# Profile may have cd'd again (e.g. to USB mount) — leave before deletes.
+cd /tmp 2>/dev/null || cd / || true
 
 OPKG="$(command -v opkg 2>/dev/null || true)"
 if [ -z "${OPKG}" ] && [ -x /opt/bin/opkg ]; then
   OPKG="/opt/bin/opkg"
 fi
-
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
-SELF="${SCRIPT_DIR}/$(basename "$0")"
 
 # ONLY ever delete the Merlin install path under /jffs — never the local git clone.
 # (Older logic set ADDON_DIR=$SCRIPT_DIR whenever watchdog.sh was present, which
@@ -34,7 +54,7 @@ case "${ADDON_DIR}" in
   *)
     echo "error: refusing to uninstall outside /jffs (ADDON_DIR=${ADDON_DIR})" >&2
     echo "  This script is for the Merlin router only." >&2
-    echo "  On the router: ${CANONICAL_ADDON}/uninstall.sh" >&2
+    echo "  On the router: cd / && ${CANONICAL_ADDON}/uninstall.sh" >&2
     echo "  From Mac: ssh user@router ${CANONICAL_ADDON}/uninstall.sh" >&2
     exit 1
     ;;
@@ -55,9 +75,25 @@ if [ ! -d /jffs ] && [ "${FORCE_UNINSTALL:-0}" != "1" ]; then
   exit 1
 fi
 
+# Warn if the invoking session was sitting inside the tree we will delete.
+# We cannot fix the parent cwd from a child process — only advise.
+case "${INVOKER_PWD}/" in
+  "${ADDON_DIR}"/*)
+    echo "warn: your shell was under ${ADDON_DIR}" >&2
+    echo "  After uninstall it may print: getcwd: No such file or directory" >&2
+    echo "  Prefer next time:  cd / && ${ADDON_DIR}/uninstall.sh" >&2
+    echo "  After this run:     cd /" >&2
+    ;;
+esac
+
 # Re-exec from /tmp so rm -rf of the install dir cannot truncate this script mid-run
 # (busybox ash reads the script as it executes; classic Merlin pitfall).
 if [ "${UNINSTALL_REEXEC:-0}" != "1" ]; then
+  if [ ! -f "${SELF}" ]; then
+    echo "error: cannot find uninstall script at ${SELF}" >&2
+    echo "  Run with absolute path: cd / && /jffs/addons/pixoo_merlin/uninstall.sh" >&2
+    exit 1
+  fi
   TMP_UNINSTALL="/tmp/pixoo_merlin_uninstall.$$.sh"
   cp -f "${SELF}" "${TMP_UNINSTALL}"
   chmod 755 "${TMP_UNINSTALL}"
@@ -139,7 +175,7 @@ if [ "${REMOVE_FILES}" = "1" ]; then
   fi
 
   # Leave cwd outside the tree before deleting it
-  cd /tmp || cd / || true
+  cd /tmp 2>/dev/null || cd / || true
   echo "==> remove ${ADDON_DIR}"
   rm -rf "${ADDON_DIR}"
 
@@ -174,3 +210,9 @@ else
 fi
 
 echo "Uninstall done."
+echo ""
+echo "If your SSH prompt shows « getcwd: No such file or directory », your"
+echo "session was still inside the deleted folder. Fix with:"
+echo "  cd /"
+echo "Next time prefer:"
+echo "  cd / && /jffs/addons/pixoo_merlin/uninstall.sh"
