@@ -13,13 +13,18 @@ dependencies = [
   "questionary>=2.0.0",
   "rich>=13.0.0",
   "PySide6>=6.8,<6.12",
+  "jsonpath-ng>=1.6",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
 
 [project.scripts]
 pixoo-monitor = "pixoo_monitor.__main__:main"
 pixoo-monitor-setup = "pixoo_monitor.setup:main"
 pixoo-monitor-test = "pixoo_monitor.test_mode:main"
 pixoo-designer = "pixoo_designer.__main__:main"
+pixoo-studio = "pixoo_studio.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
