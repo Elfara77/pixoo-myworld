@@ -39,3 +39,15 @@ def test_push_config():
     r = c.post("/api/v1/config", json=project)
     assert r.status_code == 200
     assert r.json()["accepted"] is True
+
+
+def test_sources_endpoint():
+    c = _client()
+    c.get("/api/v1/status")
+    # populate fetcher stats
+    from pixoo.engine.scheduler import Scheduler
+
+    r = c.get("/api/v1/sources")
+    assert r.status_code == 200
+    body = r.json()
+    assert "sources" in body

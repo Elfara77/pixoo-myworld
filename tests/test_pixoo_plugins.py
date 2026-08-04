@@ -5,9 +5,20 @@ from pixoo.plugins.base import get_registry
 
 def test_builtins_registered():
     reg = get_registry()
-    assert "system" in reg.plugins
-    assert "rest_api" in reg.plugins
-    assert "shell" in reg.plugins
+    for name in (
+        "system",
+        "rest_api",
+        "shell",
+        "web_scraper",
+        "mqtt",
+        "websocket",
+        "database",
+        "weather",
+        "crypto",
+        "calendar",
+        "stock",
+    ):
+        assert name in reg.plugins, name
 
 
 def test_system_cpu():
