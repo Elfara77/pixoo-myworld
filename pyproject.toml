@@ -12,12 +12,14 @@ dependencies = [
   "pillow>=10.0.0",
   "questionary>=2.0.0",
   "rich>=13.0.0",
+  "PySide6>=6.8,<6.12",
 ]
 
 [project.scripts]
 pixoo-monitor = "pixoo_monitor.__main__:main"
 pixoo-monitor-setup = "pixoo_monitor.setup:main"
 pixoo-monitor-test = "pixoo_monitor.test_mode:main"
+pixoo-designer = "pixoo_designer.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

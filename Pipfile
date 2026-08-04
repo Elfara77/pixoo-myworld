@@ -9,6 +9,7 @@ psutil = ">=6.0.0"
 pillow = ">=10.0.0"
 questionary = ">=2.0.0"
 rich = ">=13.0.0"
+pyside6 = "<6.12,>=6.8"
 
 [dev-packages]
 
@@ -19,3 +20,4 @@ python_version = "3.12"
 monitor = "python -m pixoo_monitor"
 setup = "python -m pixoo_monitor.setup"
 test = "python -m pixoo_monitor.test_mode"
+designer = "python -m pixoo_designer"
