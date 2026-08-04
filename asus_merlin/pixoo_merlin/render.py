@@ -110,6 +110,13 @@ def _short_rate(v: float) -> str:
     return f"{v:.0f}k"
 
 
+def _short_rate_int(v: float) -> str:
+    """Integer-only rate for stats (no decimal point/comma)."""
+    if v >= 1000:
+        return f"{int(round(v / 1000))}M"
+    return f"{int(round(v))}k"
+
+
 def _draw_bar(
     draw: ImageDraw.ImageDraw,
     x: int,
@@ -408,11 +415,11 @@ class FrameRenderer:
             ) -> None:
                 nonlocal yy
                 if kind == "rate":
-                    lo_s, hi_s = _short_rate(lo), _short_rate(hi)
+                    lo_s, hi_s = _short_rate_int(lo), _short_rate_int(hi)
                 elif kind == "temp":
-                    lo_s, hi_s = f"{lo:.0f}", f"{hi:.0f}C"
+                    lo_s, hi_s = f"{int(round(lo))}", f"{int(round(hi))}C"
                 else:
-                    lo_s, hi_s = f"{lo:.0f}%", f"{hi:.0f}%"
+                    lo_s, hi_s = f"{int(round(lo))}%", f"{int(round(hi))}%"
                 draw.text((PAD_X, yy), label, fill=accent, font=self.font_sm)
                 draw.text((22, yy), lo_s, fill=DIM, font=self.font_sm)
                 draw.text((40, yy), hi_s[:6], fill=accent, font=self.font_sm)
