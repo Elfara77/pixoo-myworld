@@ -113,10 +113,12 @@ def _draw_gauge(
     *,
     label: str = "",
     font: ImageFont.ImageFont | None = None,
+    label_color: Color | None = None,
 ) -> int:
-    """Full-width bar, or optional short label (e.g. temp «45°C») left of the bar."""
+    """Bar with optional short label (RAM/CPU/45°C) left of the gauge."""
     if label and font is not None:
-        draw.text((PAD_X, y), label, fill=color, font=font)
+        lc = label_color if label_color is not None else FG
+        draw.text((PAD_X, y), label, fill=lc, font=font)
         lw, _ = _text_size(draw, label, font)
         gap = 3
         bar_x = PAD_X + lw + gap
@@ -174,8 +176,9 @@ def _draw_graph(
 class FrameRenderer:
     """Renders one screen of a setup for a given animation phase."""
 
-    def __init__(self, setup: Setup) -> None:
+    def __init__(self, setup: Setup, *, marquee_speed: float = 36.0) -> None:
         self.setup = setup
+        self.marquee_speed = marquee_speed
         self.font = _font()
         self.font_sm = _font_sm()
 
@@ -210,10 +213,11 @@ class FrameRenderer:
             return y + ROW_TITLE
 
         if wid == "clients":
-            text = f"=> {snap.clients} clients <="
-            x = _center_x(draw, text, self.font_sm)
-            draw.text((x, y), text, fill=FG, font=self.font_sm)
-            return y + ROW_TEXT
+            # Number only — matches Merlin client list count as closely as possible
+            text = str(int(snap.clients))
+            x = _center_x(draw, text, self.font)
+            draw.text((x, y + 2), text, fill=FG, font=self.font)
+            return y + 14
 
         if wid == "wan_rate":
             # Space-separated D / U (no slash / tiret)
@@ -225,12 +229,20 @@ class FrameRenderer:
             return y + ROW_TEXT
 
         if wid == "cpu":
-            return _draw_gauge(draw, y, snap.cpu_pct, _bar_color(snap.cpu_pct), anim)
+            return _draw_gauge(
+                draw,
+                y,
+                snap.cpu_pct,
+                _bar_color(snap.cpu_pct),
+                anim,
+                label="CPU",
+                font=self.font_sm,
+                label_color=FG,
+            )
 
         if wid == "temp":
             t = snap.temp_c
             col = RED if t >= 80 else (YELLOW if t >= 65 else CYAN)
-            # Value only — no "Temp" label, no %
             return _draw_gauge(
                 draw,
                 y,
@@ -239,10 +251,20 @@ class FrameRenderer:
                 anim + 0.2,
                 label=f"{t:.0f}°C",
                 font=self.font_sm,
+                label_color=col,
             )
 
         if wid == "ram":
-            return _draw_gauge(draw, y, snap.ram_pct, _bar_color(snap.ram_pct), anim + 0.4)
+            return _draw_gauge(
+                draw,
+                y,
+                snap.ram_pct,
+                _bar_color(snap.ram_pct),
+                anim + 0.4,
+                label="RAM",
+                font=self.font_sm,
+                label_color=FG,
+            )
 
         if wid == "wan_graph":
             # D top-left, U bottom-right; graph in the middle without overlapping text
@@ -289,8 +311,8 @@ class FrameRenderer:
             return y + ROW_TEXT
 
         if wid == "ethernet":
-            # LAN1–LAN4: "LAN" + digits 1234 green=link / red=down
-            draw.text((PAD_X, y), "LAN", fill=DIM, font=self.font_sm)
+            # LAN1–LAN4: "LAN" (title cyan) + digits 1234 green=link / red=down
+            draw.text((PAD_X, y), "LAN", fill=CYAN, font=self.font_sm)
             x = PAD_X + _text_size(draw, "LAN", self.font_sm)[0] + 2
             ports = snap.lan_ports if len(snap.lan_ports) == 4 else (False, False, False, False)
             for i, up in enumerate(ports, start=1):
@@ -301,14 +323,15 @@ class FrameRenderer:
             return y + ROW_TEXT
 
         if wid == "wan_ip":
-            # Public WAN IP — horizontal marquee left → right
+            # Public WAN IP — continuous fast marquee left → right
             ip = (snap.wan_ip or "-").strip() or "-"
             msg = f"  {ip}  "
             tw, _ = _text_size(draw, msg, self.font_sm)
             band = Image.new("RGB", (64, 12), BG)
             bdraw = ImageDraw.Draw(band)
             period = max(1, tw + 64)
-            x = int(anim * 10) % period - tw
+            speed = max(8.0, self.marquee_speed)
+            x = int(anim * speed) % period - tw
             while x < 64 + tw:
                 bdraw.text((x, 1), msg, fill=CYAN, font=self.font_sm)
                 x += tw
@@ -319,6 +342,45 @@ class FrameRenderer:
                 draw.text((PAD_X, y), ip[:15], fill=CYAN, font=self.font_sm)
             return y + ROW_TEXT
 
+        if wid == "top_clients":
+            rows = snap.top_clients[:5]
+            if not rows:
+                draw.text((PAD_X, y), "no data", fill=DIM, font=self.font_sm)
+                return y + ROW_TEXT
+            yy = y
+            for i, tc in enumerate(rows, start=1):
+                name = (tc.name or "?").replace("\n", " ")[:12]
+                line = f"{i}.{name}"
+                draw.text((PAD_X, yy), line, fill=FG if i == 1 else DIM, font=self.font_sm)
+                yy += 10
+                if yy > 54:
+                    break
+            return min(64, yy)
+
+        if wid == "hour_stats":
+            hs = snap.hour_stats
+            mins = max(1, int(hs.window_s // 60))
+            draw.text((PAD_X, y), f"{mins}m min/max", fill=CYAN, font=self.font_sm)
+            yy = y + 10
+
+            def row(label: str, lo: float, hi: float, kind: str) -> None:
+                nonlocal yy
+                if kind == "rate":
+                    line = f"{label} {_short_rate(lo)}-{_short_rate(hi)}"
+                elif kind == "temp":
+                    line = f"{label} {lo:.0f}-{hi:.0f}C"
+                else:
+                    line = f"{label} {lo:.0f}-{hi:.0f}%"
+                draw.text((PAD_X, yy), line[:16], fill=FG, font=self.font_sm)
+                yy += 9
+
+            row("D", hs.down_min, hs.down_max, "rate")
+            row("U", hs.up_min, hs.up_max, "rate")
+            row("CPU", hs.cpu_min, hs.cpu_max, "pct")
+            row("T", hs.temp_min, hs.temp_max, "temp")
+            row("RAM", hs.ram_min, hs.ram_max, "pct")
+            return min(64, yy)
+
         if wid == "uptime":
             up = format_uptime(snap.uptime_s)
             draw.text((PAD_X, y), f"up {up}", fill=DIM, font=self.font_sm)
@@ -327,5 +389,12 @@ class FrameRenderer:
         return y
 
 
-def render_screen(setup: Setup, screen: ScreenDef, snap: Snapshot, anim: float = 0.0) -> Image.Image:
-    return FrameRenderer(setup).render(screen, snap, anim)
+def render_screen(
+    setup: Setup,
+    screen: ScreenDef,
+    snap: Snapshot,
+    anim: float = 0.0,
+    *,
+    marquee_speed: float = 36.0,
+) -> Image.Image:
+    return FrameRenderer(setup, marquee_speed=marquee_speed).render(screen, snap, anim)

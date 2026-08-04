@@ -1,4 +1,4 @@
-# Default Pixoo Merlin layout — 3 animated screens
+# Default Pixoo Merlin layout — 5 animated screens
 setup:
   title: Asus Merlin
   screen_seconds: 8.0
@@ -26,3 +26,15 @@ screens:
       - wan_ip
       - usb
       - ethernet
+
+  - id: top_dl
+    enabled: true
+    widgets:
+      - title
+      - top_clients
+
+  - id: hour_stats
+    enabled: true
+    widgets:
+      - title
+      - hour_stats

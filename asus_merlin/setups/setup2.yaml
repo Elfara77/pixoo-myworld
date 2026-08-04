@@ -1,4 +1,4 @@
-# Overview-only example (bandwidth + status disabled)
+# Overview-only example (other screens disabled)
 setup:
   title: Asus Merlin
   screen_seconds: 8.0
@@ -26,3 +26,15 @@ screens:
       - wan_ip
       - usb
       - ethernet
+
+  - id: top_dl
+    enabled: false
+    widgets:
+      - title
+      - top_clients
+
+  - id: hour_stats
+    enabled: false
+    widgets:
+      - title
+      - hour_stats

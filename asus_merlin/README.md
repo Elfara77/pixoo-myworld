@@ -114,6 +114,10 @@ vi /jffs/addons/pixoo_merlin/config.env
 | `FRAME_INTERVAL` | `1.05` | Intervalle entre pushes (≥ 1 s) |
 | `WAN_IFACE` | *(vide)* | Auto via `nvram` ; sinon forcer (`eth0`, …) |
 | `PING_HOST` | `1.1.1.1` | Test « Internet OK » |
+| `HISTORY_SECONDS` | `300` | Historique graphe D/U (secondes) |
+| `STATS_SECONDS` | `3600` | Fenêtre min/max (défaut 1 h) |
+| `TOP_CLIENTS` | `5` | Nb de top downloaders |
+| `MARQUEE_SPEED` | `36` | Vitesse du défilement IP WAN |
 | `DEMO` | `0` | `1` = métriques fictives (tests) |
 
 Après édition :
@@ -129,15 +133,17 @@ Après édition :
 
 Les layouts sont des fichiers YAML dans `setups/` :
 
-### `default` — layout complet (3 écrans)
+### `default` — layout complet (5 écrans)
 
-1. **overview** — titre « Asus Merlin », `=> n clients <=`, jauges RAM/CPU (barre seule) + temp `NN°C` + jauge  
-2. **bandwidth** — valeurs `D …` et `U …` en en-tête (pas de titre Asus) + graphe 5 min  
-3. **status** — `online`/`offline`, IP WAN en bannière défilante, `USB2`/`USB3`, `LAN1234` (vert=link / rouge=down)  
+1. **overview** — titre, nb clients (chiffre seul, liste Merlin/NMP), jauges `RAM`/`CPU` + temp `NN°C`  
+2. **bandwidth** — `D` haut-gauche, `U` bas-droite, graphe au milieu  
+3. **status** — online/offline, IP WAN (marquee rapide), USB2/USB3, `LAN1234` (LAN en cyan titre)  
+4. **top_dl** — top clients en download (`1.iPhone…`, `2.Raph-Phone`…)  
+5. **hour_stats** — min/max D/U, CPU, temp, RAM sur `STATS_SECONDS` (défaut 1 h)  
 
-### `setup2` — écran 1 seul
+### `setup2` — écran overview seul
 
-Copie de `default` avec `bandwidth` et `status` en `enabled: false`.
+Copie de `default` avec les autres écrans en `enabled: false`.
 
 ### Créer / dériver un setup
 
@@ -175,7 +181,7 @@ screens:
     widgets: [title, clients, ram, cpu, temp]
 ```
 
-Widgets : `title`, `clients`, `wan_rate`, `cpu`, `temp`, `ram`, `wan_graph`, `internet`, `usb`, `ethernet`, `wan_ip`, `uptime`.
+Widgets : `title`, `clients`, `wan_rate`, `cpu`, `temp`, `ram`, `wan_graph`, `internet`, `usb`, `ethernet`, `wan_ip`, `uptime`, `top_clients`, `hour_stats`.
 
 ---
 

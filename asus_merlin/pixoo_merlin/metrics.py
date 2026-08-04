@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import math
 import os
 import random
 import re
@@ -21,6 +23,27 @@ class BandwidthSample:
 
 
 @dataclass
+class TopClient:
+    name: str
+    down_kbps: float
+
+
+@dataclass
+class HourStats:
+    window_s: int = 3600
+    down_min: float = 0.0
+    down_max: float = 0.0
+    up_min: float = 0.0
+    up_max: float = 0.0
+    cpu_min: float = 0.0
+    cpu_max: float = 0.0
+    temp_min: float = 0.0
+    temp_max: float = 0.0
+    ram_min: float = 0.0
+    ram_max: float = 0.0
+
+
+@dataclass
 class Snapshot:
     clients: int = 0
     wan_down_kbps: float = 0.0
@@ -36,6 +59,8 @@ class Snapshot:
     wan_ip: str = "—"
     uptime_s: float = 0.0
     history: list[BandwidthSample] = field(default_factory=list)
+    top_clients: list[TopClient] = field(default_factory=list)
+    hour_stats: HourStats = field(default_factory=HourStats)
     demo: bool = False
 
 
@@ -239,13 +264,12 @@ def _macs_from_leases() -> set[str]:
 def _macs_from_arp() -> set[str]:
     """ARP / neigh entries with a real MAC (wired + Wi‑Fi recently active)."""
     macs: set[str] = set()
-    # Prefer ip neigh when available
     neigh = _run("ip -4 neigh show 2>/dev/null")
     if neigh:
         for line in neigh.splitlines():
-            # 192.168.50.4 dev br0 lladdr aa:bb:… REACHABLE
             if "lladdr" not in line:
                 continue
+            # Keep STALE/DELAY — Merlin client list includes recent hosts
             if any(s in line for s in ("FAILED", "INCOMPLETE", "NONE")):
                 continue
             m = _MAC_RE.search(line)
@@ -257,7 +281,6 @@ def _macs_from_arp() -> set[str]:
         parts = line.split()
         if len(parts) < 4:
             continue
-        # IP HW type Flags HW address Mask Device
         flags, mac = parts[2], parts[3]
         if flags == "0x0" or mac in ("00:00:00:00:00:00", "0:0:0:0:0:0"):
             continue
@@ -266,32 +289,177 @@ def _macs_from_arp() -> set[str]:
     return macs
 
 
+def _bridge_names() -> list[str]:
+    names: list[str] = []
+    # br0 + guest bridges from nvram
+    for key in ("lan_ifname", "lan1_ifname", "lan2_ifname", "lan3_ifname"):
+        v = _nvram(key)
+        if v and v not in names:
+            names.append(v)
+    for p in sorted(Path("/sys/class/net").glob("br*")):
+        if p.name not in names:
+            names.append(p.name)
+    if not names:
+        names = ["br0"]
+    return names
+
+
 def _macs_from_bridge() -> set[str]:
     macs: set[str] = set()
-    out = _run("brctl showmacs br0 2>/dev/null")
-    for line in (out or "").splitlines()[1:]:
-        parts = line.split()
-        if len(parts) < 3:
-            continue
-        # port mac islocal ageing
-        mac, islocal = parts[1], parts[2].lower()
-        if islocal in ("yes", "1"):
-            continue
-        if _MAC_RE.fullmatch(mac):
-            macs.add(_norm_mac(mac))
+    for br in _bridge_names():
+        out = _run(f"brctl showmacs {br} 2>/dev/null")
+        for line in (out or "").splitlines()[1:]:
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            mac, islocal = parts[1], parts[2].lower()
+            if islocal in ("yes", "1"):
+                continue
+            if _MAC_RE.fullmatch(mac):
+                macs.add(_norm_mac(mac))
     return macs
 
 
-def _count_clients() -> int:
-    """Unique online clients (Wi‑Fi assoc + ARP + leases + bridge) — not ETH port count."""
+def _clients_from_nmp() -> tuple[set[str], dict[str, str]] | None:
+    """Parse Merlin Network Map client list if present → (macs, mac→name)."""
     macs: set[str] = set()
-    macs |= _macs_from_wifi()
-    macs |= _macs_from_arp()
-    macs |= _macs_from_leases()
-    macs |= _macs_from_bridge()
-    # Drop broadcast / multicast-ish
+    names: dict[str, str] = {}
+    candidates = (
+        Path("/tmp/clientlist.json"),
+        Path("/tmp/nmp_client_list"),
+        Path("/jffs/nmp_cl_json.js"),
+        Path("/tmp/nmp_cl_json.js"),
+    )
+    raw = ""
+    for path in candidates:
+        if path.is_file():
+            raw = _read_text(path).strip()
+            if raw:
+                break
+    if not raw:
+        return None
+
+    # Strip JS assignment wrapper: foo = {...};
+    if raw.startswith("var ") or "=" in raw[:40]:
+        raw = raw.split("=", 1)[-1].strip().rstrip(";")
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+    def ingest(mac: str, info: dict) -> None:
+        m = _norm_mac(mac)
+        if not _MAC_RE.fullmatch(m):
+            return
+        online = str(info.get("isOnline", info.get("online", info.get("isonline", "1"))))
+        if online.lower() in ("0", "false", "no", "off"):
+            return
+        macs.add(m)
+        name = str(info.get("name") or info.get("nickName") or info.get("hostname") or "").strip()
+        if name and name not in ("*", "<unknown>"):
+            names[m] = name[:20]
+
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(v, dict):
+                ingest(str(v.get("mac", k)), v)
+            elif isinstance(v, list):
+                for item in v:
+                    if isinstance(item, dict):
+                        ingest(str(item.get("mac", "")), item)
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                ingest(str(item.get("mac", "")), item)
+
+    if not macs:
+        return None
+    return macs, names
+
+
+def _names_from_custom_clientlist() -> dict[str, str]:
+    """nvram custom_clientlist: <Name>MAC>…"""
+    names: dict[str, str] = {}
+    raw = _nvram("custom_clientlist")
+    if not raw:
+        return names
+    for chunk in raw.split("<"):
+        if not chunk or ">" not in chunk:
+            continue
+        parts = chunk.split(">")
+        if len(parts) < 2:
+            continue
+        name, mac = parts[0].strip(), _norm_mac(parts[1])
+        if name and _MAC_RE.fullmatch(mac):
+            names[mac] = name[:20]
+    return names
+
+
+def _names_from_leases() -> dict[str, str]:
+    names: dict[str, str] = {}
+    for path in (
+        Path("/var/lib/misc/dnsmasq.leases"),
+        Path("/tmp/dnsmasq.leases"),
+    ):
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            parts = line.split()
+            if len(parts) >= 4 and _MAC_RE.fullmatch(parts[1]):
+                host = parts[3]
+                if host and host not in ("*", ""):
+                    names[_norm_mac(parts[1])] = host[:20]
+    return names
+
+
+def _client_directory() -> tuple[set[str], dict[str, str]]:
+    """Online client MACs + best-effort names (Merlin client list first)."""
+    names: dict[str, str] = {}
+    names.update(_names_from_leases())
+    names.update(_names_from_custom_clientlist())
+
+    nmp = _clients_from_nmp()
+    if nmp is not None:
+        macs, nmp_names = nmp
+        names.update(nmp_names)
+        # Merge wifi/arp in case nmp is slightly stale
+        macs |= _macs_from_wifi()
+        macs |= _macs_from_arp()
+        macs |= _macs_from_bridge()
+    else:
+        macs = set()
+        macs |= _macs_from_wifi()
+        macs |= _macs_from_arp()
+        macs |= _macs_from_leases()
+        macs |= _macs_from_bridge()
+
     macs = {m for m in macs if not m.startswith(("ff:ff:ff", "01:00:5e", "33:33:"))}
-    return len(macs)
+    return macs, names
+
+
+def _count_clients() -> int:
+    return len(_client_directory()[0])
+
+
+def _sta_rx_tx(iface: str, mac: str) -> tuple[int, int] | None:
+    """Return (rx_bytes, tx_bytes) from wl sta_info — tx≈download to client."""
+    out = _run(f"wl -i {iface} sta_info {mac} 2>/dev/null", timeout=2.0)
+    if not out:
+        return None
+    rx = tx = None
+    for line in out.splitlines():
+        ls = line.strip().lower()
+        # "rx data  12345" / "tx data  678"
+        m = re.match(r"rx data\s+(\d+)", ls)
+        if m:
+            rx = int(m.group(1))
+        m = re.match(r"tx data\s+(\d+)", ls)
+        if m:
+            tx = int(m.group(1))
+    if rx is None and tx is None:
+        return None
+    return (rx or 0, tx or 0)
 
 
 def _internet_ok(host: str) -> bool:
@@ -478,8 +646,18 @@ def format_rate_pair(down_kbps: float, up_kbps: float) -> str:
     return f"{one(down_kbps)}/{one(up_kbps)}"
 
 
+@dataclass
+class _SysSample:
+    ts: float
+    down: float
+    up: float
+    cpu: float
+    temp: float
+    ram: float
+
+
 class MetricsCollector:
-    """Échantillonne CPU / WAN et conserve l'historique 5 min."""
+    """Échantillonne CPU / WAN, top clients, min/max sur fenêtre configurable."""
 
     def __init__(
         self,
@@ -487,35 +665,110 @@ class MetricsCollector:
         wan_iface: str = "",
         ping_host: str = "1.1.1.1",
         history_seconds: int = 300,
+        stats_seconds: int = 3600,
+        top_clients: int = 5,
         demo: bool = False,
     ) -> None:
         self.wan_iface = detect_wan_iface(wan_iface) if not demo else (wan_iface or "eth0")
         self.ping_host = ping_host
         self.history_seconds = history_seconds
+        self.stats_seconds = max(60, stats_seconds)
+        self.top_n = max(1, min(8, top_clients))
         self.demo = demo
         self._hist: Deque[BandwidthSample] = deque()
+        self._sys: Deque[_SysSample] = deque()
         self._prev_cpu: tuple[int, int] | None = None
         self._prev_net: tuple[float, int, int] | None = None  # ts, rx, tx
+        # mac -> (ts, tx_bytes)  tx = download to client from AP view
+        self._prev_sta: dict[str, tuple[float, int]] = {}
         self._demo_t0 = time.time()
 
     def _trim_history(self, now: float) -> None:
         cut = now - self.history_seconds
         while self._hist and self._hist[0].ts < cut:
             self._hist.popleft()
+        scut = now - self.stats_seconds
+        while self._sys and self._sys[0].ts < scut:
+            self._sys.popleft()
+
+    def _hour_stats(self) -> HourStats:
+        if not self._sys:
+            return HourStats(window_s=self.stats_seconds)
+        downs = [s.down for s in self._sys]
+        ups = [s.up for s in self._sys]
+        cpus = [s.cpu for s in self._sys]
+        temps = [s.temp for s in self._sys]
+        rams = [s.ram for s in self._sys]
+        return HourStats(
+            window_s=self.stats_seconds,
+            down_min=min(downs),
+            down_max=max(downs),
+            up_min=min(ups),
+            up_max=max(ups),
+            cpu_min=min(cpus),
+            cpu_max=max(cpus),
+            temp_min=min(temps),
+            temp_max=max(temps),
+            ram_min=min(rams),
+            ram_max=max(rams),
+        )
+
+    def _top_download_clients(self, now: float) -> list[TopClient]:
+        macs, names = _client_directory()
+        rates: list[tuple[str, float]] = []
+        ifaces = _wl_client_ifaces()
+        for mac in macs:
+            tx_bytes = None
+            for iface in ifaces:
+                pair = _sta_rx_tx(iface, mac)
+                if pair is not None:
+                    _rx, tx = pair
+                    tx_bytes = tx
+                    break
+            if tx_bytes is None:
+                continue
+            prev = self._prev_sta.get(mac)
+            self._prev_sta[mac] = (now, tx_bytes)
+            if prev is None:
+                continue
+            pts, ptx = prev
+            dt = max(0.001, now - pts)
+            # bytes → kbps (download to client)
+            kbps = max(0.0, (tx_bytes - ptx) * 8.0 / 1000.0 / dt)
+            rates.append((mac, kbps))
+
+        rates.sort(key=lambda x: x[1], reverse=True)
+        out: list[TopClient] = []
+        for mac, kbps in rates[: self.top_n]:
+            name = names.get(mac) or mac[-8:]
+            out.append(TopClient(name=name, down_kbps=kbps))
+        return out
 
     def _demo_snapshot(self) -> Snapshot:
         t = time.time() - self._demo_t0
-        down = 40 + 60 * abs(__import__("math").sin(t / 17)) + random.uniform(0, 15)
-        up = 8 + 12 * abs(__import__("math").sin(t / 23 + 1)) + random.uniform(0, 4)
-        self._hist.append(BandwidthSample(time.time(), down, up))
-        self._trim_history(time.time())
+        down = 40 + 60 * abs(math.sin(t / 17)) + random.uniform(0, 15)
+        up = 8 + 12 * abs(math.sin(t / 23 + 1)) + random.uniform(0, 4)
+        cpu = 25 + 40 * abs(math.sin(t / 11))
+        temp = 42 + 8 * abs(math.sin(t / 29))
+        ram = 35 + 20 * abs(math.sin(t / 19))
+        now = time.time()
+        self._hist.append(BandwidthSample(now, down, up))
+        self._sys.append(_SysSample(now, down, up, cpu, temp, ram))
+        self._trim_history(now)
+        tops = [
+            TopClient("iPhone Anthime", 4200 + 200 * math.sin(t / 5)),
+            TopClient("Raph-Phone", 1800 + 100 * math.sin(t / 7)),
+            TopClient("Mac", 900 + 80 * math.sin(t / 9)),
+            TopClient("Nest-Audio", 120 + 20 * math.sin(t / 11)),
+            TopClient("PIXOO 64", 40 + 10 * math.sin(t / 13)),
+        ]
         return Snapshot(
-            clients=12 + int(3 * abs(__import__("math").sin(t / 40))),
+            clients=17,
             wan_down_kbps=down,
             wan_up_kbps=up,
-            cpu_pct=25 + 40 * abs(__import__("math").sin(t / 11)),
-            temp_c=42 + 8 * abs(__import__("math").sin(t / 29)),
-            ram_pct=35 + 20 * abs(__import__("math").sin(t / 19)),
+            cpu_pct=cpu,
+            temp_c=temp,
+            ram_pct=ram,
             internet_ok=(int(t) % 40) > 3,
             usb2=True,
             usb3=(int(t) % 60) > 10,
@@ -524,6 +777,8 @@ class MetricsCollector:
             wan_ip="203.0.113.42",
             uptime_s=86400 * 3 + 3600 * 5 + 60 * 12,
             history=list(self._hist),
+            top_clients=tops[: self.top_n],
+            hour_stats=self._hour_stats(),
             demo=True,
         )
 
@@ -532,11 +787,9 @@ class MetricsCollector:
             return self._demo_snapshot()
 
         now = time.time()
-        # --- WAN rate ---
         down_kbps = up_kbps = 0.0
         cur = _iface_bytes(self.wan_iface)
         if cur is None and self.wan_iface:
-            # re-detect
             self.wan_iface = detect_wan_iface()
             cur = _iface_bytes(self.wan_iface)
         if cur is not None:
@@ -549,9 +802,7 @@ class MetricsCollector:
             self._prev_net = (now, rx, tx)
 
         self._hist.append(BandwidthSample(now, down_kbps, up_kbps))
-        self._trim_history(now)
 
-        # --- CPU ---
         cpu_pct = 0.0
         ct = _cpu_times()
         if ct is not None:
@@ -567,8 +818,12 @@ class MetricsCollector:
 
         temps = _temps_c()
         temp_c = sum(temps) / len(temps) if temps else 0.0
+        ram_pct = _ram_pct()
         lan = _lan_port_links()
         u2, u3 = _usb_status()
+
+        self._sys.append(_SysSample(now, down_kbps, up_kbps, cpu_pct, temp_c, ram_pct))
+        self._trim_history(now)
 
         return Snapshot(
             clients=_count_clients(),
@@ -576,7 +831,7 @@ class MetricsCollector:
             wan_up_kbps=up_kbps,
             cpu_pct=cpu_pct,
             temp_c=temp_c,
-            ram_pct=_ram_pct(),
+            ram_pct=ram_pct,
             internet_ok=_internet_ok(self.ping_host),
             usb2=u2,
             usb3=u3,
@@ -585,6 +840,8 @@ class MetricsCollector:
             wan_ip=_wan_ip(),
             uptime_s=_uptime_s(),
             history=list(self._hist),
+            top_clients=self._top_download_clients(now),
+            hour_stats=self._hour_stats(),
             demo=False,
         )
 

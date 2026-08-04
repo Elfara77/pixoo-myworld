@@ -21,6 +21,8 @@ class MerlinApp:
             wan_iface=config.wan_iface,
             ping_host=config.ping_host,
             history_seconds=config.history_seconds,
+            stats_seconds=config.stats_seconds,
+            top_clients=config.top_clients,
             demo=config.demo,
         )
         self.client: PixooClient | None = None
@@ -78,7 +80,9 @@ class MerlinApp:
                 sc = screens[screen_i]
                 anim = 0.0
 
-            frame = render_screen(self.setup, sc, snap, anim)
+            frame = render_screen(
+                self.setup, sc, snap, anim, marquee_speed=self.config.marquee_speed
+            )
             try:
                 self._push(frame, None, screen_i)
             except Exception as exc:
@@ -102,7 +106,9 @@ class MerlinApp:
         paths: list[Path] = []
         for c in range(cycles):
             for i, sc in enumerate(screens):
-                img = render_screen(self.setup, sc, snap, anim=0.3 + c * 0.2)
+                img = render_screen(
+                    self.setup, sc, snap, anim=0.3 + c * 0.2, marquee_speed=self.config.marquee_speed
+                )
                 path = out_dir / f"{self.setup.name}_{sc.id}_{i}.png"
                 img.save(path)
                 paths.append(path)

@@ -30,6 +30,8 @@ WIDGETS = (
     "ethernet",
     "wan_ip",
     "uptime",
+    "top_clients",
+    "hour_stats",
 )
 
 DEFAULT_SETUP_NAME = "default"
@@ -86,6 +88,10 @@ def _normalize_widgets(raw: Any) -> list[str]:
         "net": "internet",
         "eth": "ethernet",
         "ip": "wan_ip",
+        "top": "top_clients",
+        "top_dl": "top_clients",
+        "stats": "hour_stats",
+        "minmax": "hour_stats",
     }
     for w in items:
         if not w:
@@ -240,7 +246,7 @@ def set_widget_enabled(
 
 
 def ensure_default_setup(root: Path | None = None) -> Path:
-    """Write default.yaml if missing (full 3-screen layout)."""
+    """Write default.yaml if missing (full multi-screen layout)."""
     path = setups_dir(root) / f"{DEFAULT_SETUP_NAME}.yaml"
     if path.is_file():
         return path
@@ -249,21 +255,11 @@ def ensure_default_setup(root: Path | None = None) -> Path:
         title="Asus Merlin",
         screen_seconds=8.0,
         screens=[
-            ScreenDef(
-                id="overview",
-                enabled=True,
-                widgets=["title", "clients", "ram", "cpu", "temp"],
-            ),
-            ScreenDef(
-                id="bandwidth",
-                enabled=True,
-                widgets=["wan_graph"],
-            ),
-            ScreenDef(
-                id="status",
-                enabled=True,
-                widgets=["title", "internet", "wan_ip", "usb", "ethernet"],
-            ),
+            ScreenDef(id="overview", enabled=True, widgets=["title", "clients", "ram", "cpu", "temp"]),
+            ScreenDef(id="bandwidth", enabled=True, widgets=["wan_graph"]),
+            ScreenDef(id="status", enabled=True, widgets=["title", "internet", "wan_ip", "usb", "ethernet"]),
+            ScreenDef(id="top_dl", enabled=True, widgets=["title", "top_clients"]),
+            ScreenDef(id="hour_stats", enabled=True, widgets=["title", "hour_stats"]),
         ],
     )
     return write_setup(setup, root)
