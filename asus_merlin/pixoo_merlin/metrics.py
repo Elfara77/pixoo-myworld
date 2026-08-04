@@ -220,28 +220,64 @@ def _internet_ok(host: str) -> bool:
 
 
 def _usb_status() -> tuple[bool, bool]:
-    """Présence d'un périphérique USB2 (≤480) / USB3 (≥5000), hors hubs roots."""
+    """USB2 / USB3 storage mounted (or device present). Green = mounted/connected."""
     usb2 = usb3 = False
+
+    # Merlin: USB shares appear under /tmp/mnt/<label>
+    for base in (Path("/tmp/mnt"), Path("/mnt")):
+        if not base.is_dir():
+            continue
+        for entry in base.iterdir():
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            # Resolve backing device if possible
+            try:
+                st = entry.stat()
+            except OSError:
+                continue
+            # Any real mount point counts — prefer /proc/mounts for speed class
+            usb2 = True  # at least something mounted; refined below
+            break
+
+    # Classify via /proc/mounts + sysfs speed when possible
+    mounts = _read_text("/proc/mounts")
+    for line in mounts.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        src, dest = parts[0], parts[1]
+        if not dest.startswith(("/tmp/mnt/", "/mnt/")):
+            continue
+        if not src.startswith("/dev/"):
+            continue
+        # Find USB speed for this block device
+        speed = _usb_speed_for_block(src)
+        if speed is None:
+            usb2 = True
+        elif speed >= 5000:
+            usb3 = True
+        elif speed > 0:
+            usb2 = True
+
+    if usb2 or usb3:
+        return usb2, usb3
+
+    # Fallback: any non-hub USB device present
     root = Path("/sys/bus/usb/devices")
     if not root.is_dir():
         return False, False
     for dev in root.iterdir():
         name = dev.name
-        # Ignorer root hubs usb1, usb2…
-        if re.fullmatch(r"usb\d+", name):
+        if re.fullmatch(r"usb\d+", name) or ":" in name:
             continue
-        if ":" in name:
-            continue  # interfaces
         speed_s = _read_text(dev / "speed").strip()
         try:
             speed = float(speed_s)
         except ValueError:
             continue
-        # product/manufacturer present ⇒ périphérique réel
         product = _read_text(dev / "product").strip()
         if not product and not (dev / "bDeviceClass").exists():
             continue
-        # Skip hubs (class 09)
         bclass = _read_text(dev / "bDeviceClass").strip()
         if bclass.upper() in ("09", "0X09"):
             continue
@@ -250,6 +286,36 @@ def _usb_status() -> tuple[bool, bool]:
         elif speed > 0:
             usb2 = True
     return usb2, usb3
+
+
+def _usb_speed_for_block(devnode: str) -> float | None:
+    """Best-effort USB speed (Mb/s) for /dev/sdX via sysfs."""
+    name = Path(devnode).name
+    # strip partition digits: sda1 -> sda
+    base = re.sub(r"\d+$", "", name)
+    candidates = [
+        Path(f"/sys/block/{base}/device"),
+        Path(f"/sys/class/block/{base}/device"),
+    ]
+    for link in candidates:
+        try:
+            resolved = link.resolve()
+        except OSError:
+            continue
+        # Walk up looking for a usb device with speed
+        cur = resolved
+        for _ in range(8):
+            speed_f = cur / "speed"
+            if speed_f.is_file():
+                raw = _read_text(speed_f).strip()
+                try:
+                    return float(raw)
+                except ValueError:
+                    return None
+            cur = cur.parent
+            if cur == Path("/"):
+                break
+    return None
 
 
 def _eth_linked_count() -> int:

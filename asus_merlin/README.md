@@ -131,9 +131,9 @@ Les layouts sont des fichiers YAML dans `setups/` :
 
 ### `default` — layout complet (3 écrans)
 
-1. **overview** — titre « Asus Merlin », `=> n clients <=`, Wan down/up, jauges CPU / Temp / RAM  
-2. **bandwidth** — titre + graphes down/up (~5 min)  
-3. **status** — Internet ✓/✗, USB2/USB3, ETH connectés, WAN IP, uptime  
+1. **overview** — titre « Asus Merlin », `=> n clients <=`, jauges RAM / CPU / Temp (espacement fixe)  
+2. **bandwidth** — valeurs `D …` et `U …` en en-tête (pas de titre Asus) + graphe 5 min  
+3. **status** — `online`/`offline`, `USB2`/`USB3` colorés (même ligne), IP WAN, nb total clients  
 
 ### `setup2` — écran 1 seul
 
@@ -172,7 +172,7 @@ setup:
 screens:
   - id: overview
     enabled: true
-    widgets: [title, clients, wan_rate, cpu, ram]
+    widgets: [title, clients, ram, cpu, temp]
 ```
 
 Widgets : `title`, `clients`, `wan_rate`, `cpu`, `temp`, `ram`, `wan_graph`, `internet`, `usb`, `ethernet`, `wan_ip`, `uptime`.

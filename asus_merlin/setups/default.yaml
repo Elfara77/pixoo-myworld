@@ -9,15 +9,13 @@ screens:
     widgets:
       - title
       - clients
-      - wan_rate
+      - ram
       - cpu
       - temp
-      - ram
 
   - id: bandwidth
     enabled: true
     widgets:
-      - title
       - wan_graph
 
   - id: status
@@ -26,6 +24,5 @@ screens:
       - title
       - internet
       - usb
-      - ethernet
       - wan_ip
-      - uptime
+      - clients

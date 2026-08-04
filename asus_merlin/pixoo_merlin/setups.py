@@ -252,17 +252,17 @@ def ensure_default_setup(root: Path | None = None) -> Path:
             ScreenDef(
                 id="overview",
                 enabled=True,
-                widgets=["title", "clients", "wan_rate", "cpu", "temp", "ram"],
+                widgets=["title", "clients", "ram", "cpu", "temp"],
             ),
             ScreenDef(
                 id="bandwidth",
                 enabled=True,
-                widgets=["title", "wan_graph"],
+                widgets=["wan_graph"],
             ),
             ScreenDef(
                 id="status",
                 enabled=True,
-                widgets=["title", "internet", "usb", "ethernet", "wan_ip", "uptime"],
+                widgets=["title", "internet", "usb", "wan_ip", "clients"],
             ),
         ],
     )
