@@ -1,0 +1,31 @@
+# Default Pixoo Merlin layout — 3 animated screens
+setup:
+  title: Asus Merlin
+  screen_seconds: 8.0
+
+screens:
+  - id: overview
+    enabled: true
+    widgets:
+      - title
+      - clients
+      - wan_rate
+      - cpu
+      - temp
+      - ram
+
+  - id: bandwidth
+    enabled: true
+    widgets:
+      - title
+      - wan_graph
+
+  - id: status
+    enabled: true
+    widgets:
+      - title
+      - internet
+      - usb
+      - ethernet
+      - wan_ip
+      - uptime

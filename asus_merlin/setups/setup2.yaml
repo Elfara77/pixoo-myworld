@@ -1,0 +1,31 @@
+# Overview-only example (bandwidth + status disabled)
+setup:
+  title: Asus Merlin
+  screen_seconds: 8.0
+
+screens:
+  - id: overview
+    enabled: true
+    widgets:
+      - title
+      - clients
+      - wan_rate
+      - cpu
+      - temp
+      - ram
+
+  - id: bandwidth
+    enabled: false
+    widgets:
+      - title
+      - wan_graph
+
+  - id: status
+    enabled: false
+    widgets:
+      - title
+      - internet
+      - usb
+      - ethernet
+      - wan_ip
+      - uptime
