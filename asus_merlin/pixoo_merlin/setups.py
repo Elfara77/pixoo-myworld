@@ -262,7 +262,7 @@ def ensure_default_setup(root: Path | None = None) -> Path:
             ScreenDef(
                 id="status",
                 enabled=True,
-                widgets=["title", "internet", "usb", "wan_ip", "clients"],
+                widgets=["title", "internet", "wan_ip", "usb", "ethernet"],
             ),
         ],
     )

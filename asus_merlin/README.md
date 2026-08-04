@@ -131,9 +131,9 @@ Les layouts sont des fichiers YAML dans `setups/` :
 
 ### `default` — layout complet (3 écrans)
 
-1. **overview** — titre « Asus Merlin », `=> n clients <=`, jauges RAM / CPU / Temp (espacement fixe)  
+1. **overview** — titre « Asus Merlin », `=> n clients <=`, jauges RAM/CPU (barre seule) + temp `NN°C` + jauge  
 2. **bandwidth** — valeurs `D …` et `U …` en en-tête (pas de titre Asus) + graphe 5 min  
-3. **status** — `online`/`offline`, `USB2`/`USB3` colorés (même ligne), IP WAN, nb total clients  
+3. **status** — `online`/`offline`, IP WAN en bannière défilante, `USB2`/`USB3`, `LAN1234` (vert=link / rouge=down)  
 
 ### `setup2` — écran 1 seul
 

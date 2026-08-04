@@ -32,6 +32,7 @@ class Snapshot:
     usb2: bool = False
     usb3: bool = False
     eth_linked: int = 0
+    lan_ports: tuple[bool, bool, bool, bool] = (False, False, False, False)
     wan_ip: str = "—"
     uptime_s: float = 0.0
     history: list[BandwidthSample] = field(default_factory=list)
@@ -178,37 +179,119 @@ def _temps_c() -> list[float]:
     return temps
 
 
-def _count_clients() -> int:
-    leases = Path("/var/lib/misc/dnsmasq.leases")
-    if leases.is_file():
-        n = sum(1 for line in leases.read_text(encoding="utf-8", errors="ignore").splitlines() if line.strip())
-        if n > 0:
-            return n
+_MAC_RE = re.compile(r"(?i)(?:[0-9a-f]{2}:){5}[0-9a-f]{2}")
 
-    # Bridge MAC (non-local)
-    out = _run(
-        "brctl showmacs br0 2>/dev/null | awk 'NR>1 && $3 ~ /no/ {c++} END {print c+0}'"
+
+def _norm_mac(mac: str) -> str:
+    return mac.strip().lower()
+
+
+def _wl_client_ifaces() -> list[str]:
+    """All wireless interfaces including guest VIFs."""
+    found: list[str] = []
+    seen: set[str] = set()
+    keys = (
+        "wl_ifnames",
+        "wl0_ifname",
+        "wl1_ifname",
+        "wl2_ifname",
+        "wl0_vifs",
+        "wl1_vifs",
+        "wl2_vifs",
+        "lan_ifnames",
     )
-    if out.isdigit() and int(out) > 0:
-        return int(out)
+    for key in keys:
+        for part in (_nvram(key) or "").split():
+            if part and part not in seen:
+                # Skip pure LAN switch ports named lan1… — keep wl* and eth used as radio
+                if part.startswith(("wl", "eth", "ath")):
+                    seen.add(part)
+                    found.append(part)
+    return found
 
-    # Assoc Wi‑Fi
-    total = 0
-    ifaces = _nvram("wl_ifnames")
-    for iface in (ifaces or "").split():
+
+def _macs_from_wifi() -> set[str]:
+    macs: set[str] = set()
+    for iface in _wl_client_ifaces():
         assoc = _run(f"wl -i {iface} assoclist 2>/dev/null")
-        total += len(re.findall(r"(?i)[0-9a-f]{2}(?::[0-9a-f]{2}){5}", assoc))
-    if total:
-        return total
+        for m in _MAC_RE.findall(assoc or ""):
+            macs.add(_norm_mac(m))
+    return macs
 
-    # ARP reachable
-    neigh = _read_text("/proc/net/arp")
-    n = 0
-    for line in neigh.splitlines()[1:]:
+
+def _macs_from_leases() -> set[str]:
+    macs: set[str] = set()
+    for path in (
+        Path("/var/lib/misc/dnsmasq.leases"),
+        Path("/tmp/dnsmasq.leases"),
+        Path("/var/lib/dnsmasq/dnsmasq.leases"),
+    ):
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            parts = line.split()
+            # dnsmasq: <expiry> <mac> <ip> <hostname> <client-id>
+            if len(parts) >= 2 and _MAC_RE.fullmatch(parts[1]):
+                macs.add(_norm_mac(parts[1]))
+    return macs
+
+
+def _macs_from_arp() -> set[str]:
+    """ARP / neigh entries with a real MAC (wired + Wi‑Fi recently active)."""
+    macs: set[str] = set()
+    # Prefer ip neigh when available
+    neigh = _run("ip -4 neigh show 2>/dev/null")
+    if neigh:
+        for line in neigh.splitlines():
+            # 192.168.50.4 dev br0 lladdr aa:bb:… REACHABLE
+            if "lladdr" not in line:
+                continue
+            if any(s in line for s in ("FAILED", "INCOMPLETE", "NONE")):
+                continue
+            m = _MAC_RE.search(line)
+            if m:
+                macs.add(_norm_mac(m.group(0)))
+        return macs
+
+    for line in _read_text("/proc/net/arp").splitlines()[1:]:
         parts = line.split()
-        if len(parts) >= 4 and parts[2] != "0x0":
-            n += 1
-    return n
+        if len(parts) < 4:
+            continue
+        # IP HW type Flags HW address Mask Device
+        flags, mac = parts[2], parts[3]
+        if flags == "0x0" or mac in ("00:00:00:00:00:00", "0:0:0:0:0:0"):
+            continue
+        if _MAC_RE.fullmatch(mac):
+            macs.add(_norm_mac(mac))
+    return macs
+
+
+def _macs_from_bridge() -> set[str]:
+    macs: set[str] = set()
+    out = _run("brctl showmacs br0 2>/dev/null")
+    for line in (out or "").splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        # port mac islocal ageing
+        mac, islocal = parts[1], parts[2].lower()
+        if islocal in ("yes", "1"):
+            continue
+        if _MAC_RE.fullmatch(mac):
+            macs.add(_norm_mac(mac))
+    return macs
+
+
+def _count_clients() -> int:
+    """Unique online clients (Wi‑Fi assoc + ARP + leases + bridge) — not ETH port count."""
+    macs: set[str] = set()
+    macs |= _macs_from_wifi()
+    macs |= _macs_from_arp()
+    macs |= _macs_from_leases()
+    macs |= _macs_from_bridge()
+    # Drop broadcast / multicast-ish
+    macs = {m for m in macs if not m.startswith(("ff:ff:ff", "01:00:5e", "33:33:"))}
+    return len(macs)
 
 
 def _internet_ok(host: str) -> bool:
@@ -318,45 +401,47 @@ def _usb_speed_for_block(devnode: str) -> float | None:
     return None
 
 
-def _eth_linked_count() -> int:
-    # Broadcom switch (Merlin classique)
+def _lan_port_links() -> tuple[bool, bool, bool, bool]:
+    """LAN1–LAN4 link status (True = cable/link up)."""
+    ports = [False, False, False, False]
     out = _run("robocfg show 2>/dev/null")
     if out:
-        linked = 0
         for line in out.splitlines():
-            # Port 1: 1000FD enabled ...   / Port 2:  DOWN enabled ...
             m = re.match(r"Port\s+(\d+):\s+(\S+)", line)
             if not m:
                 continue
             port, state = int(m.group(1)), m.group(2).upper()
-            if port == 0:
-                continue  # souvent CPU/WAN interne
-            if state not in ("DOWN", "DISABLED", "---"):
-                linked += 1
-        return linked
+            if 1 <= port <= 4:
+                ports[port - 1] = state not in ("DOWN", "DISABLED", "---", "0")
+        return (ports[0], ports[1], ports[2], ports[3])
 
-    # Fallback: interfaces eth* hors wan, carrier=1
+    # Fallback: lan1..lan4 or eth1..eth4 carrier (skip WAN iface)
     wan = detect_wan_iface()
-    n = 0
-    for path in sorted(Path("/sys/class/net").glob("eth*")):
-        if path.name == wan:
-            continue
-        carrier = _read_text(path / "carrier").strip()
-        if carrier == "1":
-            n += 1
-    return n
+    for i in range(1, 5):
+        for name in (f"lan{i}", f"eth{i}"):
+            if name == wan:
+                continue
+            path = Path(f"/sys/class/net/{name}/carrier")
+            if path.is_file() and _read_text(path).strip() == "1":
+                ports[i - 1] = True
+                break
+    return (ports[0], ports[1], ports[2], ports[3])
+
+
+def _eth_linked_count() -> int:
+    return sum(1 for up in _lan_port_links() if up)
 
 
 def _wan_ip() -> str:
-    for key in ("wan0_ipaddr", "wan_ipaddr", "wan0_realip_ip"):
+    # Prefer public / real WAN when Merlin exposes it
+    for key in ("wan0_realip_ip", "wan0_ipaddr", "wan_ipaddr", "wanx_ipaddr"):
         ip = _nvram(key)
         if ip and ip not in ("0.0.0.0", ""):
             return ip
-    # hostname -I / ip route
     out = _run("ip -4 addr show scope global 2>/dev/null | awk '/inet /{print $2}' | head -1")
     if "/" in out:
         return out.split("/", 1)[0]
-    return out or "—"
+    return out or "-"
 
 
 def _uptime_s() -> float:
@@ -435,6 +520,7 @@ class MetricsCollector:
             usb2=True,
             usb3=(int(t) % 60) > 10,
             eth_linked=3,
+            lan_ports=(True, True, True, False),
             wan_ip="203.0.113.42",
             uptime_s=86400 * 3 + 3600 * 5 + 60 * 12,
             history=list(self._hist),
@@ -481,6 +567,8 @@ class MetricsCollector:
 
         temps = _temps_c()
         temp_c = sum(temps) / len(temps) if temps else 0.0
+        lan = _lan_port_links()
+        u2, u3 = _usb_status()
 
         return Snapshot(
             clients=_count_clients(),
@@ -490,9 +578,10 @@ class MetricsCollector:
             temp_c=temp_c,
             ram_pct=_ram_pct(),
             internet_ok=_internet_ok(self.ping_host),
-            usb2=_usb_status()[0],
-            usb3=_usb_status()[1],
-            eth_linked=_eth_linked_count(),
+            usb2=u2,
+            usb3=u3,
+            eth_linked=sum(1 for up in lan if up),
+            lan_ports=lan,
             wan_ip=_wan_ip(),
             uptime_s=_uptime_s(),
             history=list(self._hist),

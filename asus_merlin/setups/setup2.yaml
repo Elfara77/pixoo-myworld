@@ -23,6 +23,6 @@ screens:
     widgets:
       - title
       - internet
-      - usb
       - wan_ip
-      - clients
+      - usb
+      - ethernet

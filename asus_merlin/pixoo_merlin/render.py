@@ -28,9 +28,10 @@ GRAPH_UP = (255, 130, 60)
 PAD_X = 2
 ROW_TITLE = 9
 ROW_TEXT = 10
-# Same-row gauges: "CPU 25%" + bar — regular gap, no vertical crush
+# Same-row gauges — bar-only rows are a bit taller for readability
 GAUGE_ROW = 11
-GAUGE_BAR_H = 5
+GAUGE_BAR_H = 6
+GAUGE_BAR_ONLY_H = 8
 
 
 def _font() -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
@@ -106,21 +107,27 @@ def _draw_bar(
 def _draw_gauge(
     draw: ImageDraw.ImageDraw,
     y: int,
-    label: str,
     pct: float,
     color: Color,
     anim: float,
-    font: ImageFont.ImageFont,
+    *,
+    label: str = "",
+    font: ImageFont.ImageFont | None = None,
 ) -> int:
-    """Label left, bar right on one row — fixed rhythm, text never overlaps bar."""
-    label_color: Color = color if "Temp" in label else FG
-    draw.text((PAD_X, y), label, fill=label_color, font=font)
-    lw, _ = _text_size(draw, label, font)
-    gap = 3
-    bar_x = min(40, PAD_X + lw + gap)
+    """Full-width bar, or optional short label (e.g. temp «45°C») left of the bar."""
+    if label and font is not None:
+        draw.text((PAD_X, y), label, fill=color, font=font)
+        lw, _ = _text_size(draw, label, font)
+        gap = 3
+        bar_x = PAD_X + lw + gap
+        bar_h = GAUGE_BAR_H
+        bar_y = y + 2
+    else:
+        bar_x = PAD_X
+        bar_h = GAUGE_BAR_ONLY_H
+        bar_y = y + 1
     bar_w = max(12, 64 - PAD_X - bar_x)
-    bar_y = y + 2
-    _draw_bar(draw, bar_x, bar_y, bar_w, GAUGE_BAR_H, pct, color, anim)
+    _draw_bar(draw, bar_x, bar_y, bar_w, bar_h, pct, color, anim)
     return y + GAUGE_ROW
 
 
@@ -174,6 +181,7 @@ class FrameRenderer:
 
     def render(self, screen: ScreenDef, snap: Snapshot, anim: float) -> Image.Image:
         img = Image.new("RGB", (64, 64), BG)
+        self._img = img
         draw = ImageDraw.Draw(img)
         accent = int(20 + 40 * abs(math.sin(anim * math.pi)))
         draw.line([(0, 0), (63, 0)], fill=(accent, accent + 30, 80))
@@ -217,37 +225,41 @@ class FrameRenderer:
             return y + ROW_TEXT
 
         if wid == "cpu":
-            return _draw_gauge(
-                draw, y, f"CPU {snap.cpu_pct:.0f}%", snap.cpu_pct, _bar_color(snap.cpu_pct), anim, self.font_sm
-            )
+            return _draw_gauge(draw, y, snap.cpu_pct, _bar_color(snap.cpu_pct), anim)
 
         if wid == "temp":
             t = snap.temp_c
             col = RED if t >= 80 else (YELLOW if t >= 65 else CYAN)
-            return _draw_gauge(draw, y, f"Temp {t:.0f}C", min(100.0, t), col, anim + 0.2, self.font_sm)
-
-        if wid == "ram":
+            # Value only — no "Temp" label, no %
             return _draw_gauge(
                 draw,
                 y,
-                f"RAM {snap.ram_pct:.0f}%",
-                snap.ram_pct,
-                _bar_color(snap.ram_pct),
-                anim + 0.4,
-                self.font_sm,
+                min(100.0, t),
+                col,
+                anim + 0.2,
+                label=f"{t:.0f}°C",
+                font=self.font_sm,
             )
 
+        if wid == "ram":
+            return _draw_gauge(draw, y, snap.ram_pct, _bar_color(snap.ram_pct), anim + 0.4)
+
         if wid == "wan_graph":
-            # Header = live D / U values (no "Asus Merlin", no slash)
+            # D top-left, U bottom-right; graph in the middle without overlapping text
             d = _short_rate(snap.wan_down_kbps)
             u = _short_rate(snap.wan_up_kbps)
-            left = f"D {d}"
-            right = f"U {u}"
-            draw.text((PAD_X, y), left, fill=GRAPH_DOWN, font=self.font_sm)
-            rw, _ = _text_size(draw, right, self.font_sm)
-            draw.text((64 - PAD_X - rw, y), right, fill=GRAPH_UP, font=self.font_sm)
-            graph_y = y + ROW_TITLE + 1
-            graph_h = max(20, 62 - graph_y)
+            d_label = f"D {d}"
+            u_label = f"U {u}"
+            text_h = 10
+            top_y = 2
+            bot_y = 64 - text_h - 1
+            draw.text((PAD_X, top_y), d_label, fill=GRAPH_DOWN, font=self.font_sm)
+            uw, _ = _text_size(draw, u_label, self.font_sm)
+            draw.text((64 - PAD_X - uw, bot_y), u_label, fill=GRAPH_UP, font=self.font_sm)
+
+            graph_y = top_y + text_h + 1
+            graph_bottom = bot_y - 2
+            graph_h = max(16, graph_bottom - graph_y)
             _draw_graph(draw, snap, 1, graph_y, 62, graph_h, anim, self.font_sm)
             return 64
 
@@ -277,19 +289,34 @@ class FrameRenderer:
             return y + ROW_TEXT
 
         if wid == "ethernet":
-            # Physical LAN ports with link (not capped) — prefer "clients" for total hosts
-            n = max(0, int(snap.eth_linked))
-            text = f"ETH {n}"
-            x = _center_x(draw, text, self.font_sm)
-            draw.text((x, y), text, fill=FG, font=self.font_sm)
+            # LAN1–LAN4: "LAN" + digits 1234 green=link / red=down
+            draw.text((PAD_X, y), "LAN", fill=DIM, font=self.font_sm)
+            x = PAD_X + _text_size(draw, "LAN", self.font_sm)[0] + 2
+            ports = snap.lan_ports if len(snap.lan_ports) == 4 else (False, False, False, False)
+            for i, up in enumerate(ports, start=1):
+                digit = str(i)
+                col = GREEN if up else RED
+                draw.text((x, y), digit, fill=col, font=self.font_sm)
+                x += _text_size(draw, digit, self.font_sm)[0] + 1
             return y + ROW_TEXT
 
         if wid == "wan_ip":
-            ip = (snap.wan_ip or "-").strip()
-            if len(ip) > 15:
-                ip = ip[:15]
-            x = _center_x(draw, ip, self.font_sm)
-            draw.text((x, y), ip, fill=CYAN, font=self.font_sm)
+            # Public WAN IP — horizontal marquee left → right
+            ip = (snap.wan_ip or "-").strip() or "-"
+            msg = f"  {ip}  "
+            tw, _ = _text_size(draw, msg, self.font_sm)
+            band = Image.new("RGB", (64, 12), BG)
+            bdraw = ImageDraw.Draw(band)
+            period = max(1, tw + 64)
+            x = int(anim * 10) % period - tw
+            while x < 64 + tw:
+                bdraw.text((x, 1), msg, fill=CYAN, font=self.font_sm)
+                x += tw
+            img = getattr(self, "_img", None)
+            if img is not None:
+                img.paste(band, (0, y))
+            else:
+                draw.text((PAD_X, y), ip[:15], fill=CYAN, font=self.font_sm)
             return y + ROW_TEXT
 
         if wid == "uptime":
