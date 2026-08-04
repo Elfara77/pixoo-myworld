@@ -8,10 +8,11 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/studio.sh [--help]
 
-Lance Pixoo Studio — éditeur graphique 64×64 + auto-send + tray.
+Lance Pixoo Studio (architecture engine + GUI) — canvas 64×64, sync daemon.
 
 Options:
-  -h, --help   Aide
+  -h, --help              Aide
+  -p, --project PATH      Fichier .pixoo (config_version 2.0)
 
 Prérequis: ./scripts/install.sh
 EOF
@@ -28,4 +29,4 @@ if [[ ! -d .venv ]]; then
 fi
 
 export PYTHONPATH="${ROOT}/src${PYTHONPATH:+:$PYTHONPATH}"
-exec pipenv run python -m pixoo_studio "$@"
+exec pipenv run python -m pixoo studio "$@"

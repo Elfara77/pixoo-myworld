@@ -12,17 +12,25 @@ Compatible **Debian 13** et **macOS Apple Silicon**. Les checks Nextcloud / syst
 ./scripts/test.sh         # dry-run : métriques + PNG
 ./scripts/run.sh          # live → Pixoo
 ./scripts/cron-setup.sh   # automation arrière-plan
-./scripts/studio.sh       # Pixoo Studio GUI pro (branche graphical_studio)
+./scripts/pixoo.sh        # CLI unifiée (studio | daemon | render)
+./scripts/studio.sh       # Pixoo Studio GUI (engine + canvas)
 ./scripts/designer.sh     # shim → Studio
 ```
 
 Tous les scripts supportent **`-h` / `--help`**. Sans argument → **mode interactif**.
 
-### Pixoo Studio (GUI)
+### Architecture Studio + Engine
 
-Studio de bureau professionnel (**PySide6**) : canvas WYSIWYG 64×64, plugins de données (`rest_jsonpath`, shell, psutil…), fichiers `.pixoo`, auto-send, system tray, logs, animations (marquee / fade).  
+Deux couches sous `src/pixoo/` : **engine** headless (render + FastAPI + envoi Pixoo) et **studio** PySide6 (édition WYSIWYG, sync HTTP).
 
-Doc complète : **[docs/STUDIO.md](docs/STUDIO.md)** — legacy designer : [docs/DESIGNER.md](docs/DESIGNER.md).
+```bash
+./scripts/pixoo.sh version
+./scripts/pixoo.sh studio -p projects/demo_v2.pixoo
+./scripts/pixoo.sh daemon -p projects/demo_v2.pixoo --pixoo-ip 192.168.52.4
+./scripts/pixoo.sh render -p projects/demo_v2.pixoo -o /tmp/pixoo.png
+```
+
+Docs : [ARCHITECTURE.md](docs/ARCHITECTURE.md) · [API.md](docs/API.md) · [PLUGINS.md](docs/PLUGINS.md) · legacy studio [STUDIO.md](docs/STUDIO.md).
 
 ## Profils
 

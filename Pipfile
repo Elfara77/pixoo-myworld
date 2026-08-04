@@ -11,16 +11,24 @@ questionary = ">=2.0.0"
 rich = ">=13.0.0"
 pyside6 = "<6.12,>=6.8"
 jsonpath-ng = ">=1.6"
+pydantic = "<3,>=2.6"
+fastapi = "<1,>=0.115"
+uvicorn = {extras = ["standard"], version = "<1,>=0.30"}
+httpx = "<1,>=0.27"
+typer = "<1,>=0.12"
 
 [dev-packages]
 pytest = ">=8.0"
+pytest-asyncio = ">=0.24"
 
 [requires]
 python_version = "3.12"
 
 [scripts]
+pixoo = "python -m pixoo"
 monitor = "python -m pixoo_monitor"
 setup = "python -m pixoo_monitor.setup"
 test = "python -m pixoo_monitor.test_mode"
 designer = "python -m pixoo_designer"
-studio = "python -m pixoo_studio"
+studio = "python -m pixoo studio"
+studio-legacy = "python -m pixoo_studio"

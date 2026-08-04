@@ -2,13 +2,17 @@
 
 Application de bureau professionnelle (**PySide6**) pour composer, prévisualiser et pousser des dashboards **64×64** vers un Divoom Pixoo.
 
+> **Architecture v2** (`src/pixoo/`) : Studio GUI + engine headless. Voir [ARCHITECTURE.md](ARCHITECTURE.md), [API.md](API.md), [PLUGINS.md](PLUGINS.md).  
+> Le package legacy `pixoo_studio` reste disponible (`pipenv run studio-legacy`).
+
 ## Lancer
 
 ```bash
 ./scripts/install.sh
 ./scripts/studio.sh
-# alias:
-pipenv run python -m pixoo_studio
+./scripts/pixoo.sh studio -p projects/demo_v2.pixoo
+# engine seul :
+./scripts/pixoo.sh daemon -p projects/demo_v2.pixoo --pixoo-ip 192.168.52.4
 ./scripts/designer.sh   # shim → studio
 ```
 

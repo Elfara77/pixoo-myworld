@@ -1,0 +1,99 @@
+{
+  "config_version": "2.0",
+  "meta": {
+    "name": "Demo v2",
+    "author": "",
+    "pixoo_ip": "192.168.52.4",
+    "brightness": 60,
+    "created_at": "2026-08-04T17:40:12.930145+00:00",
+    "modified_at": "2026-08-04T17:40:12.930145+00:00",
+    "notes": "graph_n_motor demo"
+  },
+  "runtime": {
+    "auto_send": true,
+    "send_interval_s": 1.0,
+    "ui_fps": 20,
+    "api_host": "127.0.0.1",
+    "api_port": 8765,
+    "max_backoff_s": 60.0
+  },
+  "sources": [
+    {
+      "id": "system.cpu",
+      "label": "CPU",
+      "plugin": "system",
+      "config": {
+        "key": "cpu"
+      },
+      "unit": "%",
+      "min_value": 0.0,
+      "max_value": 100.0
+    },
+    {
+      "id": "system.ram",
+      "label": "RAM",
+      "plugin": "system",
+      "config": {
+        "key": "ram"
+      },
+      "unit": "%",
+      "min_value": 0.0,
+      "max_value": 100.0
+    },
+    {
+      "id": "system.disk",
+      "label": "Disk",
+      "plugin": "system",
+      "config": {
+        "key": "disk"
+      },
+      "unit": "%",
+      "min_value": 0.0,
+      "max_value": 100.0
+    }
+  ],
+  "screens": [
+    {
+      "id": "scr_main",
+      "title": "CPU",
+      "duration_s": 8.0,
+      "background": "#000000",
+      "transition": "fade",
+      "transition_ms": 400,
+      "elements": [
+        {
+          "id": "t1",
+          "type": "text",
+          "x": 2,
+          "y": 2,
+          "content": "CPU {system.cpu}%",
+          "color": "#3CC8FF",
+          "animation": "marquee",
+          "speed": 20
+        },
+        {
+          "id": "g1",
+          "type": "gauge",
+          "x": 2,
+          "y": 24,
+          "w": 60,
+          "h": 8,
+          "source": "system.cpu",
+          "style": "bar",
+          "color": "#28DC64"
+        },
+        {
+          "id": "gr1",
+          "type": "graph",
+          "x": 2,
+          "y": 40,
+          "w": 60,
+          "h": 20,
+          "source": "system.cpu",
+          "color": "#3CC8FF"
+        }
+      ]
+    }
+  ],
+  "history": {}
+}
