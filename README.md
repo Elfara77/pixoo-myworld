@@ -30,7 +30,9 @@ Deux couches sous `src/pixoo/` : **engine** headless (render + FastAPI + envoi P
 ./scripts/pixoo.sh render -p projects/demo_v2.pixoo -o /tmp/pixoo.png
 ```
 
-Docs : [ARCHITECTURE.md](docs/ARCHITECTURE.md) · [API.md](docs/API.md) · [PLUGINS.md](docs/PLUGINS.md) · legacy studio [STUDIO.md](docs/STUDIO.md).
+Docs : [ARCHITECTURE.md](docs/ARCHITECTURE.md) · [API.md](docs/API.md) · [PLUGINS.md](docs/PLUGINS.md) · [SOURCES.md](docs/SOURCES.md) · [TEMPLATES.md](docs/TEMPLATES.md) · [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) · legacy [STUDIO.md](docs/STUDIO.md).
+
+Plugins externes : REST, scraper, MQTT, WebSocket, DB, weather/crypto/calendar/stock — secrets via `.env` (`${ENV:NAME}`).
 
 ## Profils
 

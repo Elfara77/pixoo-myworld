@@ -16,6 +16,13 @@ fastapi = "<1,>=0.115"
 uvicorn = {extras = ["standard"], version = "<1,>=0.30"}
 httpx = "<1,>=0.27"
 typer = "<1,>=0.12"
+python-dotenv = "*"
+beautifulsoup4 = "*"
+lxml = "*"
+paho-mqtt = ">=1.6"
+websocket-client = "*"
+sqlalchemy = ">=2.0"
+icalendar = ">=5.0"
 
 [dev-packages]
 pytest = ">=8.0"

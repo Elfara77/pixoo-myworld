@@ -9,6 +9,7 @@ Default bind: `http://127.0.0.1:8765` (see `runtime.api_host` / `api_port`).
 | GET | `/api/v1/current` | Base64 PNG of last/current frame + `screen_id` |
 | POST | `/api/v1/config` | Body = full project JSON (or `{"project": …}`) |
 | GET | `/api/v1/logs?limit=` | Recent engine log lines |
+| GET | `/api/v1/sources` | Per-source stats + recent fetch logs |
 | POST | `/api/v1/force-refresh` | Fetch + render + push now |
 | POST | `/api/v1/shutdown` | Stop daemon |
 

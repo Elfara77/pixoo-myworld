@@ -1,32 +1,73 @@
 # Data source plugins
 
-Plugins implement `pixoo.plugins.base.DataSourcePlugin` and expose a module-level `PLUGIN` instance.
+Guide to configure and extend Pixoo external data sources (`src/pixoo/plugins`).
 
-## Built-ins
+## Built-in plugins
 
-| Name | Purpose | Config keys |
-|---|---|---|
-| `system` | Host metrics via psutil | `key`: `cpu`, `ram`, `disk`, `swap`, `temp`, … |
-| `rest_api` | HTTP JSON + jsonpath | `url`, `jsonpath`, `timeout`, … |
-| `shell` | Run a shell command, parse float | `command`, `timeout` |
+| Name | Role |
+|---|---|
+| `system` | Host metrics (psutil) |
+| `rest_api` | Generic HTTP REST + JSONPath |
+| `web_scraper` | HTML CSS/XPath + regex |
+| `mqtt` | MQTT subscriber (background thread) |
+| `websocket` | WebSocket stream (background thread) |
+| `database` | SQLAlchemy (sqlite/postgres/mysql) + optional MongoDB |
+| `shell` | Shell command → float |
+| `weather` | Open-Meteo / OpenWeatherMap / WeatherAPI |
+| `crypto` | CoinGecko / Binance |
+| `calendar` | iCal / ICS URL |
+| `stock` | Yahoo Finance / Alpha Vantage |
 
-## Project wiring
+User plugins: drop `PLUGIN = …` modules in repo-root [`plugins/`](../plugins/).
+
+## REST API (basic)
 
 ```json
 {
-  "id": "system.cpu",
-  "label": "CPU",
-  "plugin": "system",
-  "config": { "key": "cpu" },
-  "unit": "%"
+  "url": "https://api.example.com/data",
+  "method": "GET",
+  "extract_path": "$.value",
+  "cache_ttl": 60,
+  "retries": 3,
+  "timeout": 5
 }
 ```
 
-Elements reference sources by id (`gauge.source`, `{system.cpu}` placeholders in text).
+### With Bearer auth
 
-## Custom plugins
+```json
+{
+  "url": "https://api.example.com/data",
+  "headers_json": "{}",
+  "auth_type": "bearer",
+  "auth_token": "${ENV:HA_TOKEN}",
+  "extract_path": "$.state"
+}
+```
 
-Drop a `.py` file in repo-root `plugins/` with:
+Legacy keys `jsonpath` / `headers_json` / `body_json` remain supported.
+
+## Secrets
+
+Store tokens in `.env` (never commit):
+
+```bash
+HA_TOKEN=xxxx
+OPENWEATHER_API_KEY=yyyy
+```
+
+Reference them as `${ENV:HA_TOKEN}` in plugin configs. Resolved by `pixoo.utils.secrets`.
+
+## Tags in text elements
+
+See also [SOURCES.md](SOURCES.md). Examples:
+
+- `{system.cpu}%`
+- `{weather.temperature:.1f}°C`
+- `{btc.price:,.0f}`
+- `{time:%H:%M}`
+
+## Custom plugin
 
 ```python
 from pixoo.plugins.base import DataSourcePlugin
@@ -41,8 +82,8 @@ class MyPlugin(DataSourcePlugin):
 PLUGIN = MyPlugin()
 ```
 
-The registry loads builtins then that directory on first `get_registry()` call.
+## Architecture helpers
 
-## Schema form
-
-`get_config_schema()` returns a dict used by Studio’s plugin inspector (`type`, `label`, `default`, `enum`, `required`).
+- `DataFetcher` — parallel fetch + stats
+- `CacheManager` — TTL + stale fallback (`~/.cache/pixoo/cache.json`)
+- Studio: **Sources → Add source…** wizard, **Templates** menu
