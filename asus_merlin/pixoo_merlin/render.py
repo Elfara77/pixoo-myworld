@@ -192,6 +192,12 @@ def _draw_graph(
     downs = [s.down_kbps for s in hist]
     ups = [s.up_kbps for s in hist]
     peak = max(max(downs), max(ups), 1.0)
+    # Zoom Up only when Dwn/Up display units differ (k vs M, threshold 1000 kbps)
+    down_max = max(downs)
+    up_max = max(ups)
+    down_unit_m = down_max >= 1000.0
+    up_unit_m = up_max >= 1000.0
+    up_zoom = UP_GRAPH_ZOOM if down_unit_m != up_unit_m else 1.0
 
     def series(vals: Sequence[float], color: Color, *, y_zoom: float = 1.0) -> None:
         n = len(vals)
@@ -211,7 +217,7 @@ def _draw_graph(
             draw.point((tx, ty), fill=FG)
 
     series(downs, GRAPH_DOWN, y_zoom=1.0)
-    series(ups, GRAPH_UP, y_zoom=UP_GRAPH_ZOOM)
+    series(ups, GRAPH_UP, y_zoom=up_zoom)
 
 
 class FrameRenderer:
