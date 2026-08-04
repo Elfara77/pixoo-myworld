@@ -86,6 +86,12 @@ class SyncClient:
             r.raise_for_status()
             return list(r.json().get("logs") or [])
 
+    def sources(self) -> dict[str, Any]:
+        with httpx.Client(timeout=self.timeout) as client:
+            r = client.get(self._url("/api/v1/sources"))
+            r.raise_for_status()
+            return r.json()
+
     def start_engine(self, project: Path, *, host: str = "127.0.0.1", port: int = 8765) -> bool:
         if self.is_reachable():
             return True

@@ -52,3 +52,21 @@ class ForceRefreshResponse(BaseModel):
 class ShutdownResponse(BaseModel):
     ok: bool
     message: str = "shutting down"
+
+
+class SourceStat(BaseModel):
+    id: str
+    plugin: str
+    label: str = ""
+    success_rate: float = 1.0
+    avg_response_time: float = 0.0
+    last_error: Optional[str] = None
+    last_success: Optional[str] = None
+    last_ms: Optional[float] = None
+    cache_hit_rate: float = 0.0
+    value_preview: Optional[Any] = None
+
+
+class SourcesResponse(BaseModel):
+    sources: list[SourceStat] = Field(default_factory=list)
+    fetch_logs: list[dict[str, Any]] = Field(default_factory=list)

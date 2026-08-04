@@ -18,6 +18,8 @@ from pixoo.common.api_schemas import (
     LogEntry,
     LogsResponse,
     ShutdownResponse,
+    SourceStat,
+    SourcesResponse,
     StatusResponse,
     VersionResponse,
 )
@@ -104,6 +106,32 @@ def create_app(
     ) -> LogsResponse:
         entries = [LogEntry(**e) for e in mem_logs.entries(since=since, limit=limit)]
         return LogsResponse(logs=entries)
+
+    @app.get("/api/v1/sources", response_model=SourcesResponse)
+    def sources() -> SourcesResponse:
+        snap = scheduler.fetcher.stats_snapshot()
+        values = scheduler._values or {}
+        items: list[SourceStat] = []
+        for src in scheduler.project.sources:
+            st = snap.get(src.id) or {}
+            preview = values.get(src.id)
+            if isinstance(preview, (dict, list)):
+                preview = str(preview)[:120]
+            items.append(
+                SourceStat(
+                    id=src.id,
+                    plugin=src.plugin,
+                    label=src.label,
+                    success_rate=float(st.get("success_rate") or 1.0),
+                    avg_response_time=float(st.get("avg_response_time") or 0.0),
+                    last_error=st.get("last_error"),
+                    last_success=st.get("last_success"),
+                    last_ms=st.get("last_ms"),
+                    cache_hit_rate=float(st.get("cache_hit_rate") or 0.0),
+                    value_preview=preview,
+                )
+            )
+        return SourcesResponse(sources=items, fetch_logs=scheduler.fetcher.recent_logs(40))
 
     @app.post("/api/v1/force-refresh", response_model=ForceRefreshResponse)
     def force_refresh() -> ForceRefreshResponse:
