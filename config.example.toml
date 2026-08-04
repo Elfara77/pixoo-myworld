@@ -1,0 +1,217 @@
+# Pixoo 64 — configuration de monitoring (profils Nextcloud / N40 / status)
+# Copié / généré vers config.toml par ./scripts/setup.sh
+# Relancer setup ajoute / met à jour des profils sans effacer les autres.
+# Setups nommés: ./scripts/setup.sh --save NAME  /  --load NAME  → configs/setups/
+
+# Profils fusionnés au runtime (union des métriques à true)
+# Exemples: ["status"], ["priority","n40"], ["nextcloud_full"], ["system"]
+active_profiles = ["system"]
+# Nom du setup actif (optionnel, renseigné par --save / --load)
+# setup_name = "mon-setup"
+
+[pixoo]
+# IP locale du Pixoo 64 (app Divoom → Device → IP)
+ip = "192.168.1.137"
+size = 64
+brightness = 60
+
+[refresh]
+interval_seconds = 3.0
+page_seconds = 8.0
+
+# Vue aplatie (union) — maintenue par le setup ; éditable à la main
+[metrics]
+cpu = true
+cpu_per_core = false
+load_avg = true
+ram = true
+swap = true
+disk = true
+network = true
+temperature = true
+uptime = false
+processes = false
+services = false
+php_fpm_workers = false
+db_health = false
+redis = false
+nc_disk = false
+nc_http = false
+nc_cron = false
+nc_errors = false
+nc_external_storage = false
+status_host = false
+status_nc_http = false
+status_services = false
+status_disk = false
+status_network = false
+status_thermal = false
+status_overall = false
+
+[disk]
+# Point de montage ("" = auto : / sous Linux, data NC si profil priority, etc.)
+path = ""
+
+[network]
+interface = ""
+
+[thresholds]
+cpu_percent = 90
+ram_percent = 90
+swap_percent = 80
+disk_percent = 90
+temperature_celsius = 85
+nc_disk_percent = 90
+
+[display]
+overview = true
+bars = true
+dark = true
+# Page thermique compacte N40
+n40_thermal = false
+# native = pixels nets 64×64 (bitmap) ; scaled = hi-res + LANCZOS (plus doux)
+render_mode = "scaled"
+# défaut legacy disque ; préférer [metric_styles] ou styles par [[screens]]
+disk_style = "bar"
+
+# Styles pie/barre par mesure (si pas d'écrans custom)
+# [metric_styles]
+# cpu = "bar"
+# ram = "pie"
+# disk = "pie"
+
+# Écrans personnalisés (pages Pixoo) — laisser vide = layout auto
+# Chaque écran: métriques cochées, titre défaut/perso, style pie|bar par jauge %
+# [[screens]]
+# id = "s1"
+# title = ""
+# title_default = true
+# metrics = ["cpu", "load_avg"]
+# styles = { cpu = "bar" }
+#
+# [[screens]]
+# id = "s2"
+# title = "Stockage"
+# title_default = false
+# metrics = ["disk", "swap"]
+# styles = { disk = "pie", swap = "bar" }
+
+# Historique / sparklines (pages hist_<metric>)
+# period: s|m|h|j|M|a — ex. 45s, 15m, 2h, 7j, 1M, 1a (nombre seul = minutes)
+[history]
+default_period = "15m"
+buckets = 56
+
+# Exemple — décommenter pour activer:
+# [history.metrics.cpu]
+# enabled = true
+# period = "15m"
+#
+# [history.metrics.ram]
+# enabled = true
+# period = "1h"
+#
+# [history.metrics.disk]
+# enabled = true
+# period = "7j"
+
+# Chemins Debian 13 / Nextcloud typiques
+[nextcloud]
+data_dir = "/var/www/nextcloud/data"
+web_root = "/var/www/nextcloud"
+status_url = "http://127.0.0.1/status.php"
+occ_path = "/var/www/nextcloud/occ"
+# Ex. "http://127.0.0.1/fpm-status" si exposé en local
+php_fpm_status_url = ""
+# Ex. "/var/log/nginx/nextcloud.error.log"
+log_path = ""
+db_type = "mariadb"
+services = ["php8.4-fpm", "nginx", "mariadb", "redis-server", "cron"]
+external_mounts = []
+
+[status]
+# Ping gateway auto si vide ; sinon ex. "1.1.1.1"
+ping_enabled = true
+ping_target = ""
+
+# --- Profils (cases à cocher via setup) ---
+
+[profiles.system]
+enabled = true
+cpu = true
+cpu_per_core = false
+load_avg = true
+ram = true
+swap = true
+disk = true
+network = true
+temperature = true
+uptime = false
+processes = false
+
+[profiles.priority]
+enabled = false
+disk = true
+services = true
+php_fpm_workers = true
+db_health = true
+redis = true
+
+[profiles.nextcloud_files]
+enabled = false
+nc_disk = true
+nc_http = true
+nc_cron = true
+nc_errors = false
+nc_external_storage = false
+
+[profiles.n40]
+enabled = false
+cpu = true
+ram = true
+swap = true
+temperature = true
+network = true
+load_avg = true
+
+[profiles.status]
+enabled = false
+status_host = true
+status_nc_http = true
+status_services = true
+status_disk = true
+status_network = true
+status_thermal = true
+status_overall = true
+services = true
+nc_http = true
+disk = true
+nc_disk = true
+network = true
+temperature = true
+load_avg = true
+
+[profiles.nextcloud_full]
+enabled = false
+# Union priority + nextcloud_files + n40 + status (flags individuels toujours éditables)
+disk = true
+services = true
+php_fpm_workers = true
+db_health = true
+redis = true
+nc_disk = true
+nc_http = true
+nc_cron = true
+cpu = true
+ram = true
+swap = true
+temperature = true
+network = true
+load_avg = true
+status_host = true
+status_nc_http = true
+status_services = true
+status_disk = true
+status_network = true
+status_thermal = true
+status_overall = true
