@@ -87,9 +87,19 @@ def _font_sm() -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
 
 
 def _bar_color(pct: float) -> Color:
-    if pct >= 90:
+    """CPU / RAM / disk used % → green / yellow / red."""
+    if pct >= 85:
         return RED
-    if pct >= 70:
+    if pct >= 65:
+        return YELLOW
+    return GREEN
+
+
+def _temp_color(celsius: float) -> Color:
+    """Router temperature °C → green / yellow / red."""
+    if celsius >= 75:
+        return RED
+    if celsius >= 55:
         return YELLOW
     return GREEN
 
@@ -262,20 +272,21 @@ class FrameRenderer:
             return y + ROW_TEXT
 
         if wid == "cpu":
+            col = _bar_color(snap.cpu_pct)
             return _draw_gauge(
                 draw,
                 y,
                 snap.cpu_pct,
-                _bar_color(snap.cpu_pct),
+                col,
                 anim,
                 label="CPU",
                 font=self.font_sm,
-                label_color=FG,
+                label_color=col,
             )
 
         if wid == "temp":
             t = snap.temp_c
-            col = RED if t >= 80 else (YELLOW if t >= 65 else CYAN)
+            col = _temp_color(t)
             return _draw_gauge(
                 draw,
                 y,
@@ -288,15 +299,16 @@ class FrameRenderer:
             )
 
         if wid == "ram":
+            col = _bar_color(snap.ram_pct)
             return _draw_gauge(
                 draw,
                 y,
                 snap.ram_pct,
-                _bar_color(snap.ram_pct),
+                col,
                 anim + 0.4,
                 label="RAM",
                 font=self.font_sm,
-                label_color=FG,
+                label_color=col,
             )
 
         if wid == "wan_graph":
@@ -426,7 +438,7 @@ class FrameRenderer:
                 yy += 9
 
             t_hi = hs.temp_max
-            t_col = RED if t_hi >= 80 else (YELLOW if t_hi >= 65 else CYAN)
+            t_col = _temp_color(t_hi)
             row("Dwn", hs.down_min, hs.down_max, "rate", GRAPH_DOWN)
             row("Up", hs.up_min, hs.up_max, "rate", GRAPH_UP)
             row("CPU", hs.cpu_min, hs.cpu_max, "pct", _bar_color(hs.cpu_max))
@@ -441,7 +453,7 @@ class FrameRenderer:
             label = (snap.disk_label or "disk").upper()
             title = f"{label} {pct:.0f}%"
             x = _center_x(draw, title, self.font_sm)
-            draw.text((x, y), title, fill=CYAN, font=self.font_sm)
+            draw.text((x, y), title, fill=color, font=self.font_sm)
             _draw_pie(draw, 32, 34, 18, pct, color)
             used = snap.disk_used_mb
             total = snap.disk_total_mb
