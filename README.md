@@ -12,9 +12,14 @@ Compatible **Debian 13** et **macOS Apple Silicon**. Les checks Nextcloud / syst
 ./scripts/test.sh         # dry-run : métriques + PNG
 ./scripts/run.sh          # live → Pixoo
 ./scripts/cron-setup.sh   # automation arrière-plan
+./scripts/designer.sh     # UI graphique (branche graphical / PySide6)
 ```
 
 Tous les scripts supportent **`-h` / `--help`**. Sans argument → **mode interactif**.
+
+### Designer graphique
+
+Éditeur professionnel 64×64 (écrans, titres, jauges, sparklines, couleurs, sources commande/HTTP) avec **aperçu live**. Voir [docs/DESIGNER.md](docs/DESIGNER.md).
 
 ## Profils
 
@@ -152,6 +157,7 @@ period = "30m"
 | `test.sh` | Profil / Pixoo / dossier PNG | oui |
 | `run.sh` | Profil / once / IP | oui |
 | `cron-setup.sh` | Menu enable/disable/… | oui |
+| `designer.sh` | UI graphique PySide6 | oui |
 
 ## Structure
 
