@@ -142,9 +142,12 @@ fi
 echo "==> chmod +x scripts"
 "${SSH[@]}" "${TARGET}" "chmod 755 '${REMOTE_PATH}/install.sh' '${REMOTE_PATH}/uninstall.sh' '${REMOTE_PATH}/run.sh' '${REMOTE_PATH}/watchdog.sh' 2>/dev/null || true"
 
+# Entware PATH prefix for non-interactive SSH (stock Merlin often lacks /opt/bin)
+REMOTE_ENV="export PATH=/opt/bin:/opt/sbin:/opt/usr/bin:\$PATH; [ -f /opt/etc/profile ] && . /opt/etc/profile"
+
 if [[ "${DO_INSTALL}" -eq 1 ]]; then
   echo "==> remote install.sh (opkg python3 python3-pillow python3-yaml)"
-  "${SSH[@]}" "${TARGET}" "cd '${REMOTE_PATH}' && ./install.sh"
+  "${SSH[@]}" "${TARGET}" "${REMOTE_ENV}; cd '${REMOTE_PATH}' && ./install.sh"
   echo ""
   echo "Next: edit config if needed:"
   echo "  ssh ${TARGET} vi ${REMOTE_PATH}/config.env"

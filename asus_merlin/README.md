@@ -13,6 +13,8 @@ Affiche en permanence les métriques du routeur **AsusWRT-Merlin** sur un **Divo
 5. Pixoo 64 joignable en HTTP sur le LAN (`http://<PIXOO_IP>/post`)
 
 > Le paquet Entware s’appelle **`python3`**, pas `python` (`opkg install python` échoue).
+>
+> Entware place `opkg` / `python3` sous **`/opt/bin`**. Les scripts exportent ce PATH (et sourcent `/opt/etc/profile` si présent) car un SSH non interactif ne charge souvent pas le profil Entware.
 
 Paquets installés automatiquement par `install.sh` :
 
@@ -214,13 +216,21 @@ Au boot : ligne dans `/jffs/scripts/services-start`.
 /jffs/addons/pixoo_merlin/uninstall.sh
 ```
 
-Retire cru, hook services-start, daemon et le dossier addon.  
-**Laisse** les paquets opkg (`python3`, `python3-pillow`, `python3-yaml`).
+Retire le daemon, le job **cru**, le hook `services-start`, puis **supprime entièrement** `/jffs/addons/pixoo_merlin/` (scripts, `pixoo_merlin/`, `setups/`, logs, …).  
+Une copie de `config.env` est aussi sauvée sous `/tmp/pixoo_merlin.config.env.bak`.  
+**Laisse** les paquets opkg par défaut.
 
-Pour aussi désinstaller les paquets :
+Options :
 
 ```sh
+# Garder uniquement config.env dans le dossier addon
+KEEP_CONFIG=1 /jffs/addons/pixoo_merlin/uninstall.sh
+
+# Aussi désinstaller python3 / pillow / yaml
 UNINSTALL_OPKG=1 /jffs/addons/pixoo_merlin/uninstall.sh
+
+# Ne pas supprimer les fichiers (cru + daemon seulement)
+REMOVE_FILES=0 /jffs/addons/pixoo_merlin/uninstall.sh
 ```
 
 ---
@@ -245,6 +255,7 @@ Sur le routeur, les deps viennent **uniquement** de `opkg` (pas pip).
 
 | Problème | Piste |
 |----------|--------|
+| `opkg not found` | Entware manquant, ou PATH sans `/opt/bin` — les scripts le fixent ; vérifier `ls /opt/bin/opkg` |
 | `python: not found` | Utiliser **`python3`** ; relancer `install.sh` |
 | `No module named PIL` | `opkg install python3-pillow` |
 | `No module named yaml` | `opkg install python3-yaml` |

@@ -6,6 +6,23 @@
 # Requires Entware (opkg). Uses python3 — package "python" does NOT exist.
 set -eu
 
+# Entware: non-interactive SSH often skips profile, so opkg/python3 are missing from PATH
+export PATH="/opt/bin:/opt/sbin:/opt/usr/bin:${PATH}"
+if [ -f /opt/etc/profile ]; then
+  # shellcheck disable=SC1091
+  . /opt/etc/profile
+fi
+
+OPKG="$(command -v opkg 2>/dev/null || true)"
+if [ -z "${OPKG}" ] && [ -x /opt/bin/opkg ]; then
+  OPKG="/opt/bin/opkg"
+fi
+
+PYTHON="$(command -v python3 2>/dev/null || true)"
+if [ -z "${PYTHON}" ] && [ -x /opt/bin/python3 ]; then
+  PYTHON="/opt/bin/python3"
+fi
+
 ADDON_DIR="/jffs/addons/pixoo_merlin"
 CRU_NAME="PixooMerlin"
 MARKER="# pixoo_merlin"
@@ -13,26 +30,39 @@ SERVICES_START="/jffs/scripts/services-start"
 
 echo "==> Pixoo Merlin install → ${ADDON_DIR}"
 
-if ! command -v opkg >/dev/null 2>&1; then
-  echo "error: opkg not found. Install Entware first:" >&2
-  echo "  https://github.com/Entware/Entware/wiki/Install-on-Asus-stock-firmware" >&2
+if [ -z "${OPKG}" ] || [ ! -x "${OPKG}" ]; then
+  echo "error: opkg not found (Entware required)." >&2
+  echo "  Expected at /opt/bin/opkg after Entware install." >&2
+  echo "  Guide: https://github.com/Entware/Entware/wiki/Install-on-Asus-stock-firmware" >&2
+  echo "  PATH=${PATH}" >&2
+  echo "  ls /opt/bin/opkg:" >&2
+  ls -la /opt/bin/opkg 2>&1 >&2 || true
   exit 1
 fi
 
+echo "==> using opkg at ${OPKG}"
 echo "==> opkg update"
-opkg update
+"${OPKG}" update
 
 echo "==> opkg install python3 python3-pillow python3-yaml"
 # Exact Entware package names — do NOT use "python" (missing on Merlin/Entware).
-opkg install python3 python3-pillow python3-yaml
+"${OPKG}" install python3 python3-pillow python3-yaml
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "error: python3 still not in PATH after opkg install" >&2
+# Re-resolve after install (PATH already includes /opt/bin)
+PYTHON="$(command -v python3 2>/dev/null || true)"
+if [ -z "${PYTHON}" ] && [ -x /opt/bin/python3 ]; then
+  PYTHON="/opt/bin/python3"
+fi
+
+if [ -z "${PYTHON}" ] || [ ! -x "${PYTHON}" ]; then
+  echo "error: python3 still not found after opkg install" >&2
+  echo "  PATH=${PATH}" >&2
+  echo "  ls /opt/bin/python3:" >&2
+  ls -la /opt/bin/python3 2>&1 >&2 || true
   exit 1
 fi
 
-PYTHON3="$(command -v python3)"
-echo "==> using ${PYTHON3} ($("${PYTHON3}" --version 2>&1))"
+echo "==> using ${PYTHON} ($("${PYTHON}" --version 2>&1))"
 
 # Resolve source directory (folder containing this script)
 SRC="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"

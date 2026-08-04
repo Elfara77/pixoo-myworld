@@ -2,6 +2,18 @@
 # Foreground runner — always python3 (never "python").
 set -eu
 
+# Entware: non-interactive / cru shells often skip profile
+export PATH="/opt/bin:/opt/sbin:/opt/usr/bin:${PATH}"
+if [ -f /opt/etc/profile ]; then
+  # shellcheck disable=SC1091
+  . /opt/etc/profile
+fi
+
+PYTHON="$(command -v python3 2>/dev/null || true)"
+if [ -z "${PYTHON}" ] && [ -x /opt/bin/python3 ]; then
+  PYTHON="/opt/bin/python3"
+fi
+
 ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 cd "${ROOT}"
 
@@ -18,10 +30,11 @@ if [ -f "${ROOT}/config.env" ]; then
   set +a
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
+if [ -z "${PYTHON}" ] || [ ! -x "${PYTHON}" ]; then
   echo "error: python3 not found. Run install.sh (opkg install python3 python3-pillow python3-yaml)" >&2
+  echo "  PATH=${PATH}" >&2
   exit 1
 fi
 
 export PYTHONPATH="${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 -m pixoo_merlin "$@"
+exec "${PYTHON}" -m pixoo_merlin "$@"
