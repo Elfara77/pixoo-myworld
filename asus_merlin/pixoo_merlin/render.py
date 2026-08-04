@@ -32,8 +32,10 @@ UP_GRAPH_ZOOM = 5.0
 PAD_X = 2
 ROW_TITLE = 9
 ROW_TEXT = 10
+# Clients line → first gauge: breathing room on overview
+ROW_CLIENTS = 13
 # Same-row gauges — fixed label column so RAM/CPU/Temp bars share left/right edges
-GAUGE_ROW = 11
+GAUGE_ROW = 13
 GAUGE_BAR_H = 6
 GAUGE_BAR_ONLY_H = 8
 GAUGE_LABEL_COL = 24  # px reserved for label; RAM/CPU/Temp bars share edges
@@ -263,10 +265,10 @@ class FrameRenderer:
             # Wired vs Wi‑Fi — UI label « WAN » = WLAN associated
             lan_n = int(snap.clients_lan)
             wan_n = int(snap.clients_wan)
-            text = f"{lan_n} LAN - {wan_n} WAN"
+            text = f"{lan_n} LAN {wan_n} WAN"
             x = _center_x(draw, text, self.font_sm)
-            draw.text((x, y + 2), text, fill=FG, font=self.font_sm)
-            return y + ROW_TEXT
+            draw.text((x, y), text, fill=FG, font=self.font_sm)
+            return y + ROW_CLIENTS
 
         if wid == "wan_rate":
             # Space-separated D / U (no slash / tiret)
@@ -376,7 +378,7 @@ class FrameRenderer:
         if wid == "wan_ip":
             # Public WAN IP — continuous marquee right → left
             ip = (snap.wan_ip or "-").strip() or "-"
-            msg = f"  WAN IP {ip}   "
+            msg = f"  IP {ip}   "
             tw, _ = _text_size(draw, msg, self.font_sm)
             band = Image.new("RGB", (64, 12), BG)
             bdraw = ImageDraw.Draw(band)
@@ -391,19 +393,37 @@ class FrameRenderer:
             if img is not None:
                 img.paste(band, (0, y))
             else:
-                draw.text((PAD_X, y), f"WAN IP {ip}"[:15], fill=CYAN, font=self.font_sm)
+                draw.text((PAD_X, y), f"IP {ip}"[:15], fill=CYAN, font=self.font_sm)
             return y + ROW_TEXT
 
         if wid == "top_clients":
-            rows = snap.top_clients[:5]
+            # Header + top 4 downloaders (1 red, 2–3 yellow, 4 gray)
+            c = tuple(min(255, int(v + 20 * abs(math.sin(anim * math.pi * 2)))) for v in CYAN)
+            title_col: Color = (int(c[0]), int(c[1]), int(c[2]))
+            hdr = "Internet"
+            x = _center_x(draw, hdr, self.font_sm)
+            draw.text((x, y), hdr, fill=title_col, font=self.font_sm)
+            yy = y + ROW_TITLE
+
+            sub = "Top Dwn Clients"
+            sx = _center_x(draw, sub, self.font_sm)
+            draw.text((sx, yy), sub, fill=FG, font=self.font_sm)
+            yy += ROW_TEXT
+
+            rows = snap.top_clients[:4]
             if not rows:
-                draw.text((PAD_X, y), "no data", fill=DIM, font=self.font_sm)
-                return y + ROW_TEXT
-            yy = y
+                draw.text((PAD_X, yy), "no data", fill=DIM, font=self.font_sm)
+                return yy + ROW_TEXT
             for i, tc in enumerate(rows, start=1):
                 name = (tc.name or "?").replace("\n", " ")[:12]
                 line = f"{i}.{name}"
-                draw.text((PAD_X, yy), line, fill=FG if i == 1 else DIM, font=self.font_sm)
+                if i == 1:
+                    color = RED
+                elif i <= 3:
+                    color = YELLOW
+                else:
+                    color = DIM
+                draw.text((PAD_X, yy), line, fill=color, font=self.font_sm)
                 yy += 10
                 if yy > 54:
                     break
@@ -439,7 +459,7 @@ class FrameRenderer:
                 else:
                     lo_s, hi_s = f"{int(round(lo))}%", f"{int(round(hi))}%"
                 draw.text((PAD_X, yy), label, fill=accent, font=self.font_sm)
-                draw.text((22, yy), lo_s, fill=DIM, font=self.font_sm)
+                draw.text((22, yy), lo_s, fill=accent, font=self.font_sm)
                 draw.text((40, yy), hi_s[:6], fill=accent, font=self.font_sm)
                 yy += 9
 
@@ -468,7 +488,7 @@ class FrameRenderer:
             else:
                 foot = f"{used:.0f}/{total:.0f}M"
             fx = _center_x(draw, foot, self.font_sm)
-            draw.text((fx, 54), foot, fill=DIM, font=self.font_sm)
+            draw.text((fx, 54), foot, fill=color, font=self.font_sm)
             return 64
 
         if wid == "uptime":

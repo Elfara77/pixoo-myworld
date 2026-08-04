@@ -30,7 +30,6 @@ screens:
   - id: top_dl
     enabled: false
     widgets:
-      - title
       - top_clients
 
   - id: hour_stats

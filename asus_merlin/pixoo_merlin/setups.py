@@ -303,7 +303,7 @@ def ensure_default_setup(root: Path | None = None) -> Path:
             ScreenDef(id="overview", enabled=True, widgets=["title", "clients", "ram", "cpu", "temp"]),
             ScreenDef(id="bandwidth", enabled=True, seconds=12.0, widgets=["wan_graph"]),
             ScreenDef(id="status", enabled=True, seconds=10.0, widgets=["title", "internet", "wan_ip", "usb", "ethernet"]),
-            ScreenDef(id="top_dl", enabled=True, widgets=["title", "top_clients"]),
+            ScreenDef(id="top_dl", enabled=True, widgets=["top_clients"]),
             ScreenDef(id="hour_stats", enabled=True, widgets=["hour_stats"]),
             ScreenDef(id="disk", enabled=True, widgets=["disk_pie"]),
         ],
