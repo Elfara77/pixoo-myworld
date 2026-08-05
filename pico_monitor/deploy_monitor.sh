@@ -586,8 +586,10 @@ configure_screens() {
       sid="$(echo "${sid}" | tr '[:lower:]' '[:upper:]' | tr -d ' ')"
       if [[ "${sid}" == "ALL" ]]; then
         for x in "${ALL_PIXOO_SCREENS[@]}"; do
-          local found=0
-          for y in "${on[@]}"; do [[ "${y}" == "${x}" ]] && found=1; done
+          local found=0 j
+          for (( j=0; j<${#on[@]}; j++ )); do
+            [[ "${on[$j]}" == "${x}" ]] && found=1
+          done
           (( found )) || on+=("${x}")
         done
       elif [[ -n "${sid}" ]]; then
@@ -595,17 +597,27 @@ configure_screens() {
       fi
     done
   fi
+  if (( ${#on[@]} < 1 )); then
+    on=("${ALL_PIXOO_SCREENS[@]}")
+  fi
 
   _screen_on() {
-    local s="$1" x
-    for x in "${on[@]}"; do [[ "${x}" == "${s}" ]] && return 0; done
+    local s="$1" i
+    for (( i=0; i<${#on[@]}; i++ )); do
+      [[ "${on[$i]}" == "${s}" ]] && return 0
+    done
     return 1
   }
   _screen_toggle() {
-    local s="$1" tmp=() x
+    local s="$1" tmp=() i
     if _screen_on "${s}"; then
-      for x in "${on[@]}"; do [[ "${x}" != "${s}" ]] && tmp+=("${x}"); done
-      on=("${tmp[@]}")
+      for (( i=0; i<${#on[@]}; i++ )); do
+        [[ "${on[$i]}" != "${s}" ]] && tmp+=("${on[$i]}")
+      done
+      on=()
+      if (( ${#tmp[@]} > 0 )); then
+        on=("${tmp[@]}")
+      fi
     else
       on+=("${s}")
     fi
@@ -658,8 +670,9 @@ configure_screens() {
 
   # Encode: bare defaults → all ; defaults+SUM → all,SUM ; else explicit list
   local -a defs=() extras=()
-  local x found
-  for x in "${on[@]}"; do
+  local x found i
+  for (( i=0; i<${#on[@]}; i++ )); do
+    x="${on[$i]}"
     found=0
     for sid in "${ALL_PIXOO_SCREENS[@]}"; do
       if [[ "${x}" == "${sid}" ]]; then found=1; break; fi
