@@ -994,7 +994,7 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         _txt(img, 2, 24, "WiFi", LABEL, size="tiny", role="label")
         _draw_client_count(img, 22, 24, wifi)
         _txt(img, 34, 24, "Eth", LABEL, size="tiny", role="label")
-        _draw_client_count(img, 44, 24, wired)
+        _draw_client_count(img, 48, 24, wired)
         _txt(img, 2, 33, "All", LABEL, size="tiny", role="label")
         _draw_client_count(img, 18, 33, clients)
         usb2 = m.get("usb2") or {}
