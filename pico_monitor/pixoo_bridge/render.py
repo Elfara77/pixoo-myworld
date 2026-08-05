@@ -1,9 +1,9 @@
 """64×64 RGB screens from pico_monitor /metrics.json (Merlin exporter).
 
-Pixel fonts (no antialias). PIXOO_COLOR_MODE only affects *text*:
-  mono = all text one solid color (white); poly = per-label solid hues.
-Gauges, graphs, status dots keep full color + thresholds always.
-Critical alerts can blink (PIXOO_ALERT_BLINK) on text and gauge fills.
+Pixel fonts (no antialias).
+PIXOO_COLOR_MODE: mono = labels/units gray + values solid white;
+  poly = colored labels; values always distinct from labels/units.
+Status (LAN/USB/WAN) always green/red. Gauges/pies: green→yellow→orange→red.
 """
 
 from __future__ import annotations
@@ -14,10 +14,11 @@ from PIL import Image, ImageDraw
 
 from pixoo_bridge import pixel_font as pf
 
-# Full UI palette (graphics always use this)
 BG = (6, 8, 14)
-FG = (230, 235, 245)
-DIM = (90, 100, 120)
+FG = (240, 244, 250)
+DIM = (100, 108, 122)
+LABEL = (110, 118, 132)
+UNIT = (95, 105, 120)
 CYAN = (40, 210, 230)
 ORANGE = (255, 140, 50)
 GREEN = (40, 220, 110)
@@ -28,42 +29,42 @@ GRAPH_DOWN = (40, 190, 255)
 GRAPH_UP = (255, 130, 60)
 HEADER = (40, 210, 230)
 HEADER_FG = (6, 8, 14)
-# Solid text color in mono mode (no gray nuances)
 TEXT_MONO = (255, 255, 255)
+MONO_DIM = (130, 130, 130)
 
-ALL_SCREEN_IDS = ("SYS", "GRP", "TOP", "TMP", "PIE", "SRV", "NET", "CLI", "LOD", "WLC")
+# Logical rotation order
+ALL_SCREEN_IDS = ("SYS", "LOD", "TMP", "GRP", "WLC", "TOP", "CLI", "NET", "PIE", "SRV")
 SCREEN_TITLES = {
     "SYS": "System",
-    "GRP": "Traffic",
-    "TOP": "Top",
-    "TMP": "Temps",
-    "PIE": "Disk Space",
-    "SRV": "Services",
-    "NET": "Ports",
-    "CLI": "Clients",
     "LOD": "Load",
+    "TMP": "Temps",
+    "GRP": "Traffic",
     "WLC": "WiFi/LAN",
+    "TOP": "Top",
+    "CLI": "Clients",
+    "NET": "Ports",
+    "PIE": "Disk",
+    "SRV": "Services",
 }
 
-# Active rotation set (mutable); default = all
 _ACTIVE_SCREENS: list[str] = list(ALL_SCREEN_IDS)
-
-# Back-compat alias updated by set_screens / set_render_options
 SCREEN_IDS: tuple[str, ...] = tuple(_ACTIVE_SCREENS)
 
 _COLOR_MODE = "mono"
 _TEXT_SCROLL = True
 _ALERT_BLINK = True
-_BLINK_PERIOD_S = 0.55  # half-cycle; full blink ~1.1s (matches frame interval)
+_BLINK_PERIOD_S = 0.55
 
-# Critical thresholds
 CRIT_LOAD = 90.0
+WARN_LOAD = 70.0
 CRIT_TEMP_CPU = 85
+WARN_TEMP_CPU = 70
 CRIT_TEMP_RADIO = 65
+WARN_TEMP_RADIO = 55
 CRIT_DISK = 90.0
+WARN_DISK = 70.0
 
-
-_RATE_STYLE = "short"  # short=K/M/G · long=Kb/s|Mb/s|Gb/s
+_RATE_STYLE = "short"
 
 
 def get_screen_ids() -> tuple[str, ...]:
@@ -71,10 +72,6 @@ def get_screen_ids() -> tuple[str, ...]:
 
 
 def set_screens(spec: str | None) -> tuple[str, ...]:
-    """Select active screens. spec='all' or 'SYS,GRP,TMP' (order preserved).
-
-    At least one valid id required; invalid tokens ignored.
-    """
     global SCREEN_IDS, _ACTIVE_SCREENS
     if spec is None or not str(spec).strip() or str(spec).strip().lower() in ("all", "*", "default"):
         _ACTIVE_SCREENS = list(ALL_SCREEN_IDS)
@@ -83,14 +80,9 @@ def set_screens(spec: str | None) -> tuple[str, ...]:
     wanted: list[str] = []
     for tok in str(spec).replace(";", ",").replace(" ", ",").split(","):
         sid = tok.strip().upper()
-        if not sid:
-            continue
         if sid in ALL_SCREEN_IDS and sid not in wanted:
             wanted.append(sid)
-    if not wanted:
-        _ACTIVE_SCREENS = list(ALL_SCREEN_IDS)
-    else:
-        _ACTIVE_SCREENS = wanted
+    _ACTIVE_SCREENS = wanted if wanted else list(ALL_SCREEN_IDS)
     SCREEN_IDS = tuple(_ACTIVE_SCREENS)
     return SCREEN_IDS
 
@@ -126,20 +118,125 @@ def set_render_options(
         set_screens(screens)
 
 
-def _text_color(color: Sequence[int]) -> tuple[int, int, int]:
-    """Mono: flatten all text to one solid white. Poly: keep the solid hue."""
-    if _COLOR_MODE == "mono":
-        return TEXT_MONO
-    return (int(color[0]), int(color[1]), int(color[2]))
-
-
 def _blink_on() -> bool:
-    """True during the visible half of the blink cycle."""
     if not _ALERT_BLINK:
         return True
     import time
 
     return (int(time.monotonic() / _BLINK_PERIOD_S) % 2) == 0
+
+
+def _ink(color: Sequence[int], *, role: str = "value") -> tuple[int, int, int]:
+    """role: label|unit|value|status|alert — values stand out from labels/units."""
+    if role == "status":
+        return (int(color[0]), int(color[1]), int(color[2]))
+    if role == "alert":
+        return RED
+    if _COLOR_MODE == "mono":
+        if role in ("label", "unit"):
+            return MONO_DIM
+        return TEXT_MONO
+    if role in ("label", "unit"):
+        return LABEL if role == "label" else UNIT
+    return (int(color[0]), int(color[1]), int(color[2]))
+
+
+def _txt(
+    img,
+    x: int,
+    y: int,
+    text: str,
+    color: Sequence[int],
+    *,
+    size: str = "normal",
+    role: str = "value",
+    alert: bool = False,
+) -> int:
+    if alert and _ALERT_BLINK and not _blink_on():
+        return x
+    col = _ink(RED if alert else color, role="alert" if alert else role)
+    return pf.draw_text(img, x, y, text, col, size=size)
+
+
+def _split_rate(mbps: float) -> tuple[str, str]:
+    """Return (number, unit) for emphasis."""
+    v = float(mbps or 0)
+    if _RATE_STYLE == "long":
+        if v >= 1000:
+            return f"{v / 1000:.1f}", "Gb/s"
+        if v >= 100:
+            return f"{v:.0f}", "Mb/s"
+        if v >= 1:
+            return f"{v:.1f}", "Mb/s"
+        return f"{v * 1000:.0f}", "Kb/s"
+    if v >= 1000:
+        return f"{v / 1000:.1f}", "G"
+    if v >= 100:
+        return f"{v:.0f}", "M"
+    if v >= 1:
+        return f"{v:.1f}", "M"
+    if v >= 0.001:
+        return f"{v * 1000:.0f}", "K"
+    return "0", "K"
+
+
+def _rate_short(mbps: float) -> str:
+    n, u = _split_rate(mbps)
+    return f"{n}{u}"
+
+
+def _rate(mbps: float) -> str:
+    n, u = _split_rate(mbps)
+    if _RATE_STYLE == "long":
+        return f"{n} {u}"
+    return f"{n}{u}"
+
+
+def _scroll(text: str, max_chars: int) -> str:
+    return pf.scroll_slice(text, max_chars, enabled=_TEXT_SCROLL)
+
+
+def _temp_avg(m: dict[str, Any]) -> int:
+    vals = [int(m.get(k, 0) or 0) for k in ("temp_cpu", "temp_2g", "temp_5g")]
+    vals = [v for v in vals if v > 0]
+    return int(round(sum(vals) / len(vals))) if vals else 0
+
+
+def _level_color(pct: float, *, kind: str = "load") -> tuple[int, int, int]:
+    """green=ok, yellow=warn, orange=elevated, red=risky."""
+    p = float(pct or 0)
+    if kind == "temp_cpu":
+        if p >= CRIT_TEMP_CPU:
+            return RED
+        if p >= WARN_TEMP_CPU:
+            return ORANGE
+        if p >= 55:
+            return YELLOW
+        return GREEN
+    if kind == "temp":
+        if p >= CRIT_TEMP_RADIO:
+            return RED
+        if p >= WARN_TEMP_RADIO:
+            return ORANGE
+        if p >= 45:
+            return YELLOW
+        return GREEN
+    if kind == "disk":
+        if p >= CRIT_DISK:
+            return RED
+        if p >= WARN_DISK:
+            return ORANGE
+        if p >= 50:
+            return YELLOW
+        return GREEN
+    # load
+    if p >= CRIT_LOAD:
+        return RED
+    if p >= WARN_LOAD:
+        return ORANGE
+    if p >= 50:
+        return YELLOW
+    return GREEN
 
 
 def _is_crit_load(pct: float) -> bool:
@@ -158,180 +255,61 @@ def _is_crit_temp(label: str, val: int) -> bool:
     return False
 
 
-def _txt(
+def _draw_val_unit(
     img,
     x: int,
     y: int,
-    text: str,
-    color: Sequence[int],
+    num: str,
+    unit: str,
+    val_color: Sequence[int],
     *,
     size: str = "normal",
     alert: bool = False,
 ) -> int:
-    """Draw text; if alert and blink off-phase, skip (blink effect)."""
-    if alert and _ALERT_BLINK and not _blink_on():
-        return x
-    col = RED if alert else color
-    return pf.draw_text(img, x, y, text, _text_color(col) if not alert else RED, size=size)
-
-
-def _rate(mbps: float) -> str:
-    """Format Mbps — long units when PIXOO_RATE_STYLE=long."""
-    v = float(mbps or 0)
-    if _RATE_STYLE == "long":
-        if v >= 1000:
-            return f"{v / 1000:.1f} Gb/s"
-        if v >= 100:
-            return f"{v:.0f} Mb/s"
-        if v >= 1:
-            return f"{v:.1f} Mb/s"
-        return f"{v * 1000:.0f} Kb/s"
-    return _rate_short(v)
-
-
-def _rate_short(mbps: float) -> str:
-    """Compact rate (K/M/G) — used on tight layouts unless long style forced."""
-    v = float(mbps or 0)
-    if _RATE_STYLE == "long":
-        # Still compact-ish but with unit suffix truncated for 64px
-        if v >= 1000:
-            return f"{v / 1000:.1f}G"
-        if v >= 100:
-            return f"{v:.0f}M"
-        if v >= 1:
-            return f"{v:.1f}M"
-        return f"{v * 1000:.0f}K"
-    if v >= 1000:
-        return f"{v / 1000:.1f}G"
-    if v >= 100:
-        return f"{v:.0f}M"
-    if v >= 1:
-        return f"{v:.1f}M"
-    if v >= 0.001:
-        return f"{v * 1000:.0f}K"
-    return "0K"
-
-
-def _scroll(text: str, max_chars: int) -> str:
-    return pf.scroll_slice(text, max_chars, enabled=_TEXT_SCROLL)
-
-
-def _temp_avg(m: dict[str, Any]) -> int:
-    vals = [int(m.get(k, 0) or 0) for k in ("temp_cpu", "temp_2g", "temp_5g")]
-    vals = [v for v in vals if v > 0]
-    if not vals:
-        return 0
-    return int(round(sum(vals) / len(vals)))
-
-
-def _temp_hot(label: str, val: int) -> bool:
-    if label == "CPU":
-        return val >= 85
-    if label in ("2G", "5G", "AVG"):
-        return val >= 65
-    return False
-
-
-def _gauge_color(pct: float, *, kind: str = "load") -> tuple[int, int, int]:
-    """Threshold colors for gauges (always polychrome)."""
-    p = float(pct or 0)
-    if kind == "temp":
-        if p >= 85:
-            return RED
-        if p >= 65:
-            return YELLOW
-        return CYAN
-    if p >= 90:
-        return RED
-    if p >= 70:
-        return ORANGE
-    if kind == "ram":
-        return ORANGE
-    return CYAN
+    x = _txt(img, x, y, num, val_color, size=size, role="value", alert=alert)
+    if unit:
+        x = _txt(img, x + 1, y + (0 if size != "big" else 2), unit, UNIT, size="tiny", role="unit")
+    return x
 
 
 def _header(img, draw: ImageDraw.ImageDraw, title: str, idx: int) -> None:
     screens = get_screen_ids()
     n = len(screens)
     draw.rectangle([0, 0, 63, 9], fill=HEADER)
-    # More title room when few/no page dots
-    if n <= 1:
-        title_chars = 10
-    elif n >= 6:
-        title_chars = 5
-    else:
-        title_chars = 6
+    mark = f"[{idx + 1}]" if n > 1 else ""
+    mark_w = pf.text_width_tiny(mark) if mark else 0
+    title_chars = max(3, (62 - mark_w) // 6)
     shown = _scroll(title, title_chars)
-    _txt(img, 1, 1, shown, HEADER_FG, size="normal")
-    if _COLOR_MODE == "mono":
-        draw.rectangle([0, 0, 63, 9], fill=HEADER)
-        pf.draw_text(img, 1, 1, shown, HEADER_FG, size="normal")
-    # Page dots only when 2+ screens are in rotation
-    if n <= 1:
-        return
-    dot0 = 64 - n * 4 - 1
-    for i in range(n):
-        x = dot0 + i * 4
-        if i == idx:
-            draw.rectangle([x, 3, x + 2, 6], fill=HEADER_FG)
-        else:
-            draw.rectangle([x, 3, x + 2, 6], outline=HEADER_FG)
+    pf.draw_text(img, 1, 1, shown, HEADER_FG, size="normal")
+    if mark:
+        pf.draw_tiny(img, 63 - mark_w - 1, 2, mark, HEADER_FG)
 
 
-def _gauge(
-    draw: ImageDraw.ImageDraw,
-    x: int,
-    y: int,
-    w: int,
-    pct: float,
-    color,
-    *,
-    alert: bool = False,
-) -> None:
+def _gauge(draw, x: int, y: int, w: int, pct: float, color, *, alert: bool = False) -> None:
     pct = max(0.0, min(100.0, float(pct)))
-    draw.rectangle([x, y, x + w - 1, y + 5], outline=DIM, fill=BAR_BG)
+    draw.rectangle([x, y, x + w - 1, y + 4], outline=DIM, fill=BAR_BG)
     fill = int((w - 2) * pct / 100)
     if fill <= 0:
         return
-    # Critical: blink fill between RED and empty track
     if alert and _ALERT_BLINK:
         if not _blink_on():
             return
         color = RED
     elif alert:
         color = RED
-    draw.rectangle([x + 1, y + 1, x + fill, y + 4], fill=color)
+    draw.rectangle([x + 1, y + 1, x + fill, y + 3], fill=color)
 
 
-def _gauge_row(
-    img,
-    draw: ImageDraw.ImageDraw,
-    y: int,
-    label: str,
-    pct: float,
-    color,
-    *,
-    label_w: int = 18,
-    alert: bool = False,
-) -> None:
-    """Label + gauge on the same row; optional critical blink."""
-    _txt(img, 2, y, label[:5], DIM if not alert else RED, size="tiny", alert=alert)
-    _gauge(draw, 2 + label_w, y, 64 - 4 - label_w, pct, color, alert=alert)
+def _gauge_row(img, draw, y: int, label: str, pct: float, *, kind: str = "load") -> None:
+    alert = _is_crit_load(pct) if kind == "load" else _is_crit_disk(pct)
+    col = _level_color(pct, kind=kind if kind != "load" else "load")
+    _txt(img, 2, y, label[:4], LABEL, size="tiny", role="label", alert=alert)
+    _gauge(draw, 20, y, 42, pct, col, alert=alert)
 
 
-def _graph(
-    img,
-    draw: ImageDraw.ImageDraw,
-    x: int,
-    y: int,
-    w: int,
-    h: int,
-    data: list[float],
-    color,
-    filled: bool = False,
-) -> None:
+def _graph(img, draw, x, y, w, h, data, color, filled: bool = False) -> None:
     if not data:
-        _txt(img, x + 4, y + max(0, h // 2 - 3), "NO DATA", DIM, size="tiny")
+        _txt(img, x + 4, y + max(0, h // 2 - 3), "NO DATA", DIM, size="tiny", role="label")
         return
     mx = max(max(data), 0.01)
     pts = []
@@ -365,10 +343,7 @@ def _demo_metrics() -> dict[str, Any]:
         "clients_wired": 4,
         "clients_2g": 6,
         "clients_5g": 4,
-        "clients_ssid": [
-            {"ssid": "Home", "n": 7},
-            {"ssid": "IoT", "n": 3},
-        ],
+        "clients_ssid": [{"ssid": "Home", "n": 7}, {"ssid": "IoT", "n": 3}],
         "wan_online": True,
         "wan_down": round(down, 2),
         "wan_up": round(up, 2),
@@ -385,8 +360,8 @@ def _demo_metrics() -> dict[str, Any]:
         "wifi_history_up": [x * 0.6 for x in hist_u],
         "lan_history_down": [x * 0.3 for x in hist_d],
         "lan_history_up": [x * 0.4 for x in hist_u],
-        "top_down": [["phone45", 125.0], ["living-tv", 42.0], ["idle", 0.0]],
-        "top_up": [["nas-box", 18.0], ["cam-front", 7.0], ["zero", 0.0]],
+        "top_down": [["phone45", 125.0], ["living-tv", 42.0]],
+        "top_up": [["nas-box", 18.0], ["cam-front", 7.0]],
         "temp_cpu": int(55 + 15 * abs(math.sin(t / 19))),
         "temp_2g": 45,
         "temp_5g": 52,
@@ -403,7 +378,6 @@ def _demo_metrics() -> dict[str, Any]:
 
 
 def _pick_top(rows: list | None, limit: int = 2) -> list[tuple[str, float]]:
-    """Prefer non-zero rates; still show rows so the screen is never empty."""
     parsed: list[tuple[str, float]] = []
     for row in rows or []:
         try:
@@ -414,8 +388,7 @@ def _pick_top(rows: list | None, limit: int = 2) -> list[tuple[str, float]]:
     if not parsed:
         return []
     nonzero = [p for p in parsed if p[1] > 0]
-    pool = nonzero if nonzero else parsed
-    return pool[:limit]
+    return (nonzero if nonzero else parsed)[:limit]
 
 
 def _active_vpns(m: dict[str, Any]) -> list[tuple[str, str]]:
@@ -428,145 +401,181 @@ def _active_vpns(m: dict[str, Any]) -> list[tuple[str, str]]:
 
 
 def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
-    screens = get_screen_ids()
-    if not screens:
-        screens = ALL_SCREEN_IDS
+    screens = get_screen_ids() or ALL_SCREEN_IDS
     idx = idx % len(screens)
     sid = screens[idx]
     img = Image.new("RGB", (64, 64), BG)
     d = ImageDraw.Draw(img)
-    title = SCREEN_TITLES.get(sid, sid)
-    _header(img, d, title, idx)
+    _header(img, d, SCREEN_TITLES.get(sid, sid), idx)
 
     if sid == "SYS":
-        _txt(img, 2, 11, str(m.get("uptime_str", "--"))[:10], FG, size="tiny")
+        _txt(img, 2, 11, "up", LABEL, size="tiny", role="label")
+        _txt(img, 14, 11, str(m.get("uptime_str", "--"))[:8], FG, size="tiny", role="value")
         online = bool(m.get("wan_online"))
         if online or not _ALERT_BLINK or _blink_on():
-            d.ellipse([56, 12, 61, 17], fill=GREEN if online else RED)
+            d.ellipse([56, 11, 61, 16], fill=GREEN if online else RED)
         cpu = float(m.get("cpu", 0) or 0)
         ram = float(m.get("ram", 0) or 0)
-        avg = _temp_avg(m)
-        _gauge_row(img, d, 20, "CPU", cpu, _gauge_color(cpu), alert=_is_crit_load(cpu))
-        _gauge_row(
-            img, d, 30, "RAM", ram, _gauge_color(ram, kind="ram"), alert=_is_crit_load(ram)
-        )
-        _gauge_row(
-            img,
-            d,
-            40,
-            "TMP",
-            avg,
-            _gauge_color(avg, kind="temp"),
-            alert=_is_crit_temp("TMP", avg),
-        )
-        _txt(img, 2, 52, f"D {_rate_short(m.get('wan_down', 0))}", GRAPH_DOWN, size="tiny")
-        _txt(img, 34, 52, f"U {_rate_short(m.get('wan_up', 0))}", GRAPH_UP, size="tiny")
-
-    elif sid == "GRP":
-        down = list(m.get("wan_history_down") or [])
-        up = list(m.get("wan_history_up") or [])
-        d_label = f"D {_rate(m.get('wan_down', 0))}"
-        u_label = f"U {_rate(m.get('wan_up', 0))}"
-        _txt(img, 2, 11, _scroll(d_label, 15), GRAPH_DOWN, size="tiny")
-        _graph(img, d, 1, 17, 62, 21, down, GRAPH_DOWN, filled=True)
-        _txt(img, 2, 39, _scroll(u_label, 15), GRAPH_UP, size="tiny")
-        _graph(img, d, 1, 45, 62, 18, up, GRAPH_UP, filled=False)
+        avg = float(m.get("temp_avg", 0) or _temp_avg(m))
+        _gauge_row(img, d, 20, "CPU", cpu, kind="load")
+        _gauge_row(img, d, 28, "RAM", ram, kind="load")
+        _gauge_row(img, d, 36, "TMP", avg, kind="temp_cpu")
+        # Down / Up with distinct value colors
+        _txt(img, 2, 46, "Down", LABEL, size="tiny", role="label")
+        dn, du = _split_rate(m.get("wan_down", 0))
+        _draw_val_unit(img, 22, 46, dn, du, GRAPH_DOWN, size="tiny")
+        _txt(img, 2, 54, "Up", LABEL, size="tiny", role="label")
+        un, uu = _split_rate(m.get("wan_up", 0))
+        _draw_val_unit(img, 22, 54, un, uu, GRAPH_UP, size="tiny")
 
     elif sid == "LOD":
-        # CPU % + Temp avg °C histories
         cpu_h = list(m.get("cpu_history") or [])
         tmp_h = list(m.get("temp_history") or [])
         cpu_now = int(m.get("cpu", 0) or 0)
         tmp_now = int(m.get("temp_avg", 0) or _temp_avg(m))
-        _txt(
-            img,
-            2,
-            11,
-            f"CPU {cpu_now}%",
-            RED if _is_crit_load(cpu_now) else CYAN,
-            size="tiny",
-            alert=_is_crit_load(cpu_now),
+        _txt(img, 2, 11, "CPU", LABEL, size="tiny", role="label")
+        _draw_val_unit(
+            img, 20, 11, str(cpu_now), "%", _level_color(cpu_now), size="tiny", alert=_is_crit_load(cpu_now)
         )
-        _graph(img, d, 1, 17, 62, 21, cpu_h, CYAN, filled=True)
-        _txt(
+        _graph(img, d, 1, 18, 62, 18, cpu_h, _level_color(cpu_now), filled=True)
+        _txt(img, 2, 38, "TMP", LABEL, size="tiny", role="label")
+        _draw_val_unit(
             img,
-            2,
-            39,
-            f"TMP {tmp_now}C",
-            RED if _is_crit_temp("TMP", tmp_now) else ORANGE,
+            20,
+            38,
+            str(tmp_now),
+            "°C",
+            _level_color(tmp_now, kind="temp"),
             size="tiny",
             alert=_is_crit_temp("TMP", tmp_now),
         )
-        _graph(img, d, 1, 45, 62, 18, tmp_h, ORANGE, filled=False)
+        _graph(img, d, 1, 45, 62, 17, tmp_h, _level_color(tmp_now, kind="temp"), filled=False)
+
+    elif sid == "TMP":
+        # Top: CPU | AVG — Bottom: 2G | 5G
+        avg = int(m.get("temp_avg", 0) or _temp_avg(m))
+        cells = [
+            (0, 11, "CPU", int(m.get("temp_cpu", 0) or 0), "temp_cpu"),
+            (32, 11, "AVG", avg, "temp"),
+            (0, 37, "2G", int(m.get("temp_2g", 0) or 0), "temp"),
+            (32, 37, "5G", int(m.get("temp_5g", 0) or 0), "temp"),
+        ]
+        for x, y, label, val, kind in cells:
+            hot = _is_crit_temp(label if label != "AVG" else "TMP", val)
+            col = _level_color(val, kind=kind)
+            outline = RED if (hot and (not _ALERT_BLINK or _blink_on())) else DIM
+            d.rectangle([x, y, x + 31, y + 24], outline=outline)
+            _txt(img, x + 2, y + 2, label, LABEL, size="tiny", role="label", alert=hot)
+            _draw_val_unit(img, x + 2, y + 11, str(val), "°C", col, size="normal", alert=hot)
+
+    elif sid == "GRP":
+        down = list(m.get("wan_history_down") or [])
+        up = list(m.get("wan_history_up") or [])
+        _txt(img, 2, 11, "Down", LABEL, size="tiny", role="label")
+        dn, du = _split_rate(m.get("wan_down", 0))
+        _draw_val_unit(img, 22, 11, dn, du, GRAPH_DOWN, size="tiny")
+        _graph(img, d, 1, 18, 62, 18, down, GRAPH_DOWN, filled=True)
+        _txt(img, 2, 38, "Up", LABEL, size="tiny", role="label")
+        un, uu = _split_rate(m.get("wan_up", 0))
+        _draw_val_unit(img, 22, 38, un, uu, GRAPH_UP, size="tiny")
+        _graph(img, d, 1, 45, 62, 17, up, GRAPH_UP, filled=False)
 
     elif sid == "WLC":
-        # Wi‑Fi vs cable (LAN) download graphs + D/U rates
         w_down = list(m.get("wifi_history_down") or [])
         l_down = list(m.get("lan_history_down") or [])
-        _txt(
-            img,
-            2,
-            11,
-            _scroll(
-                f"WiFi D{_rate_short(m.get('wifi_down', 0))} U{_rate_short(m.get('wifi_up', 0))}",
-                15,
-            ),
-            GRAPH_DOWN,
-            size="tiny",
-        )
-        _graph(img, d, 1, 17, 62, 21, w_down, GRAPH_DOWN, filled=True)
-        _txt(
-            img,
-            2,
-            39,
-            _scroll(
-                f"LAN D{_rate_short(m.get('lan_down', 0))} U{_rate_short(m.get('lan_up', 0))}",
-                15,
-            ),
-            GRAPH_UP,
-            size="tiny",
-        )
-        _graph(img, d, 1, 45, 62, 18, l_down, GRAPH_UP, filled=False)
+        _txt(img, 2, 11, "WiFi", LABEL, size="tiny", role="label")
+        dn, du = _split_rate(m.get("wifi_down", 0))
+        x = _draw_val_unit(img, 20, 11, dn, du, GRAPH_DOWN, size="tiny")
+        _txt(img, min(x + 2, 40), 11, "Up", LABEL, size="tiny", role="label")
+        un, uu = _split_rate(m.get("wifi_up", 0))
+        _draw_val_unit(img, min(x + 12, 48), 11, un, uu, GRAPH_UP, size="tiny")
+        _graph(img, d, 1, 18, 62, 18, w_down, GRAPH_DOWN, filled=True)
+        _txt(img, 2, 38, "LAN", LABEL, size="tiny", role="label")
+        dn, du = _split_rate(m.get("lan_down", 0))
+        x = _draw_val_unit(img, 18, 38, dn, du, GRAPH_UP, size="tiny")
+        _txt(img, min(x + 2, 40), 38, "Up", LABEL, size="tiny", role="label")
+        un, uu = _split_rate(m.get("lan_up", 0))
+        _draw_val_unit(img, min(x + 12, 48), 38, un, uu, ORANGE, size="tiny")
+        _graph(img, d, 1, 45, 62, 17, l_down, GRAPH_UP, filled=False)
 
     elif sid == "TOP":
-        # Full-width stacked Download / Upload for clarity
-        _txt(img, 2, 11, _scroll("Download", 10), CYAN, size="tiny")
+        _txt(img, 2, 11, "Down", LABEL, size="tiny", role="label")
         y = 18
         downs = _pick_top(m.get("top_down"))
         if not downs:
-            _txt(img, 2, y, "(none)", DIM, size="tiny")
-            y += 8
+            _txt(img, 2, y, "(none)", DIM, size="tiny", role="label")
+            y += 9
         for name, rate in downs:
-            _txt(img, 2, y, _scroll(name, 8), FG, size="tiny")
-            _txt(img, 36, y, _rate_short(rate), CYAN, size="tiny")
-            y += 8
-        y = max(y + 2, 36)
-        d.line([(2, y - 2), (61, y - 2)], fill=DIM)
-        _txt(img, 2, y, _scroll("Upload", 10), ORANGE, size="tiny")
+            _txt(img, 2, y, _scroll(name, 6), FG, size="normal", role="value")
+            dn, du = _split_rate(rate)
+            _draw_val_unit(img, 40, y + 1, dn, du, GRAPH_DOWN, size="tiny")
+            y += 9
+        y = max(y + 1, 37)
+        d.line([(2, y - 1), (61, y - 1)], fill=DIM)
+        _txt(img, 2, y, "Up", LABEL, size="tiny", role="label")
         y += 7
         ups = _pick_top(m.get("top_up"))
         if not ups:
-            _txt(img, 2, y, "(none)", DIM, size="tiny")
+            _txt(img, 2, y, "(none)", DIM, size="tiny", role="label")
         for name, rate in ups:
-            _txt(img, 2, y, _scroll(name, 8), FG, size="tiny")
-            _txt(img, 36, y, _rate_short(rate), ORANGE, size="tiny")
+            if y > 55:
+                break
+            _txt(img, 2, y, _scroll(name, 6), FG, size="normal", role="value")
+            un, uu = _split_rate(rate)
+            _draw_val_unit(img, 40, y + 1, un, uu, GRAPH_UP, size="tiny")
+            y += 9
+
+    elif sid == "CLI":
+        total = int(m.get("clients", 0) or 0)
+        wifi = int(m.get("clients_wifi", 0) or 0)
+        wired = int(m.get("clients_wired", 0) or max(0, total - wifi))
+        n2 = int(m.get("clients_2g", 0) or 0)
+        n5 = int(m.get("clients_5g", 0) or 0)
+        _txt(img, 2, 11, "All", LABEL, size="tiny", role="label")
+        _txt(img, 18, 11, str(total), FG, size="normal", role="value")
+        _txt(img, 2, 22, "WiFi", LABEL, size="tiny", role="label")
+        _txt(img, 22, 22, str(wifi), CYAN, size="tiny", role="value")
+        _txt(img, 34, 22, "LAN", LABEL, size="tiny", role="label")
+        _txt(img, 50, 22, str(wired), ORANGE, size="tiny", role="value")
+        _txt(img, 2, 30, "2G", LABEL, size="tiny", role="label")
+        _txt(img, 14, 30, str(n2), GREEN, size="tiny", role="value")
+        _txt(img, 34, 30, "5G", LABEL, size="tiny", role="label")
+        _txt(img, 46, 30, str(n5), YELLOW, size="tiny", role="value")
+        d.line([(2, 38), (61, 38)], fill=DIM)
+        y = 40
+        for row in list(m.get("clients_ssid") or [])[:3]:
+            try:
+                name, n = str(row.get("ssid", "?")), int(row.get("n", 0))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            _txt(img, 2, y, _scroll(name, 8), FG, size="normal", role="value")
+            _txt(img, 52, y + 1, str(n), CYAN, size="tiny", role="value")
             y += 8
 
-    elif sid == "TMP":
-        avg = _temp_avg(m)
-        cells = [
-            (0, 12, "CPU", int(m.get("temp_cpu", 0) or 0), CYAN),
-            (32, 12, "2G", int(m.get("temp_2g", 0) or 0), GREEN),
-            (0, 38, "5G", int(m.get("temp_5g", 0) or 0), YELLOW),
-            (32, 38, "AVG", avg, ORANGE),
-        ]
-        for x, y, label, val, color in cells:
-            hot = _temp_hot(label, val) or _is_crit_temp(label, val)
-            outline = RED if (hot and (not _ALERT_BLINK or _blink_on())) else DIM
-            d.rectangle([x, y, x + 31, y + 24], outline=outline)
-            _txt(img, x + 3, y + 2, label, DIM, size="tiny", alert=hot)
-            col = RED if hot else color
-            _txt(img, x + 3, y + 11, f"{val}C", col, size="normal", alert=hot)
+    elif sid == "NET":
+        ports = list(m.get("lan_ports") or [False, False, False, False])[:4]
+        while len(ports) < 4:
+            ports.append(False)
+        _txt(img, 2, 12, "LAN", LABEL, size="tiny", role="label")
+        x = 20
+        for i, up in enumerate(ports, start=1):
+            _txt(img, x, 11, str(i), GREEN if up else RED, size="normal", role="status")
+            x += 10
+        wifi = int(m.get("clients_wifi", 0) or 0)
+        clients = int(m.get("clients", 0) or 0)
+        _txt(img, 2, 26, "WiFi", LABEL, size="tiny", role="label")
+        _txt(img, 22, 26, str(wifi), CYAN, size="tiny", role="value")
+        _txt(img, 34, 26, "All", LABEL, size="tiny", role="label")
+        _txt(img, 50, 26, str(clients), FG, size="tiny", role="value")
+        usb2 = m.get("usb2") or {}
+        usb3 = m.get("usb3") or {}
+        u2, u3 = bool(usb2.get("present")), bool(usb3.get("present"))
+        _txt(img, 2, 38, "USB2", GREEN if u2 else RED, size="normal", role="status")
+        _txt(img, 34, 38, "USB3", GREEN if u3 else RED, size="normal", role="status")
+        online = bool(m.get("wan_online"))
+        _txt(img, 2, 52, "WAN", LABEL, size="tiny", role="label", alert=not online)
+        if online or not _ALERT_BLINK or _blink_on():
+            d.ellipse([22, 52, 28, 58], fill=GREEN if online else RED)
 
     elif sid == "PIE":
         jffs = m.get("jffs") or {}
@@ -584,117 +593,63 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         j_used = int(jffs.get("used", 0) or 0)
         u_used = int(usb.get("used", 0) or 0) if usb.get("present") else 0
         c_used = int(cache.get("buffers", 0) or 0)
-        j_alert = _is_crit_disk(j_used)
-        u_alert = _is_crit_disk(u_used)
-        _txt(img, 2, 11, f"JFFS {j_used}%", DIM, size="tiny", alert=j_alert)
-        _txt(img, 34, 11, f"USB {u_used}%", DIM, size="tiny", alert=u_alert)
-        j_col = RED if j_alert else _gauge_color(j_used)
-        u_col = RED if u_alert else _gauge_color(u_used, kind="ram")
-        pie(16, 30, 10, 0 if (j_alert and _ALERT_BLINK and not _blink_on()) else j_used, j_col)
-        pie(48, 30, 10, 0 if (u_alert and _ALERT_BLINK and not _blink_on()) else u_used, u_col)
-        _txt(img, 2, 44, f"CACHE {c_used}%", DIM, size="tiny")
-        pie(40, 54, 7, c_used, CYAN)
+        _txt(img, 2, 11, "JFFS", LABEL, size="tiny", role="label")
+        _draw_val_unit(img, 22, 11, str(j_used), "%", _level_color(j_used, kind="disk"), size="tiny")
+        _txt(img, 36, 11, "USB", LABEL, size="tiny", role="label")
+        _draw_val_unit(img, 52, 11, str(u_used), "%", _level_color(u_used, kind="disk"), size="tiny")
+        j_col = _level_color(j_used, kind="disk")
+        u_col = _level_color(u_used, kind="disk")
+        show_j = not (_is_crit_disk(j_used) and _ALERT_BLINK and not _blink_on())
+        show_u = not (_is_crit_disk(u_used) and _ALERT_BLINK and not _blink_on())
+        pie(16, 30, 10, j_used if show_j else 0, j_col)
+        pie(48, 30, 10, u_used if show_u else 0, u_col)
+        _txt(img, 2, 44, "CACHE", LABEL, size="tiny", role="label")
+        _draw_val_unit(img, 28, 44, str(c_used), "%", _level_color(c_used, kind="disk"), size="tiny")
+        pie(48, 54, 7, c_used, _level_color(c_used, kind="disk"))
 
     elif sid == "SRV":
-        y = 12
+        y = 11
         vpns = _active_vpns(m)
         if not vpns:
-            _txt(img, 2, y, "VPN none", DIM, size="tiny")
+            _txt(img, 2, y, "VPN", LABEL, size="tiny", role="label")
+            _txt(img, 20, y, "none", DIM, size="tiny", role="value")
             y += 9
         else:
             for name, typ in vpns:
-                _txt(img, 2, y, name, GREEN, size="tiny")
-                _txt(img, 28, y, typ, FG, size="tiny")
+                _txt(img, 2, y, name, GREEN, size="tiny", role="status")
+                _txt(img, 28, y, typ, FG, size="tiny", role="value")
                 y += 8
-        y = max(y + 2, 28)
+        y = max(y + 1, 26)
         jffs = m.get("jffs") or {}
         usb2 = m.get("usb2") or {}
         usb3 = m.get("usb3") or {}
-        # Fallback to legacy usb blob
         usb = m.get("usb") or {}
         if not usb2 and not usb3 and usb:
             usb2 = {"present": bool(usb.get("present")), "used": usb.get("used", 0)}
-
-        j_used = float(jffs.get("used", 0) or 0)
-        _gauge_row(
-            img, d, y, "JFFS", j_used, _gauge_color(j_used), alert=_is_crit_disk(j_used)
-        )
-        y += 10
+        _gauge_row(img, d, y, "JFFS", float(jffs.get("used", 0) or 0), kind="disk")
+        y += 9
         u2_on = bool(usb2.get("present"))
         u2_used = float(usb2.get("used", 0) or usb.get("used", 0) or 0)
-        _txt(img, 2, y, "USB2", GREEN if u2_on else RED, size="tiny")
+        _txt(img, 2, y, "USB2", GREEN if u2_on else RED, size="tiny", role="status")
         if u2_on:
-            _gauge(d, 22, y, 40, u2_used, ORANGE, alert=_is_crit_disk(u2_used))
+            _gauge(d, 24, y, 38, u2_used, _level_color(u2_used, kind="disk"), alert=_is_crit_disk(u2_used))
         else:
-            _txt(img, 28, y, "off", DIM, size="tiny")
-        y += 10
+            _txt(img, 28, y, "off", RED, size="tiny", role="status")
+        y += 9
         u3_on = bool(usb3.get("present"))
         u3_used = float(usb3.get("used", 0) or 0)
-        _txt(img, 2, y, "USB3", GREEN if u3_on else RED, size="tiny")
+        _txt(img, 2, y, "USB3", GREEN if u3_on else RED, size="tiny", role="status")
         if u3_on:
-            _gauge(d, 22, y, 40, u3_used, ORANGE, alert=_is_crit_disk(u3_used))
+            _gauge(d, 24, y, 38, u3_used, _level_color(u3_used, kind="disk"), alert=_is_crit_disk(u3_used))
         else:
-            _txt(img, 28, y, "off", DIM, size="tiny")
-
-    elif sid == "NET":
-        # LAN ports + Wi‑Fi + USB presence
-        ports = list(m.get("lan_ports") or [False, False, False, False])
-        while len(ports) < 4:
-            ports.append(False)
-        ports = ports[:4]
-        _txt(img, 2, 12, "LAN", DIM, size="tiny")
-        x = 20
-        for i, up in enumerate(ports, start=1):
-            _txt(img, x, 12, str(i), GREEN if up else RED, size="normal")
-            x += 10
-        wifi = int(m.get("clients_wifi", 0) or 0)
-        clients = int(m.get("clients", 0) or 0)
-        _txt(img, 2, 28, f"WiFi {wifi}", CYAN, size="tiny")
-        _txt(img, 34, 28, f"All {clients}", FG, size="tiny")
-        usb2 = m.get("usb2") or {}
-        usb3 = m.get("usb3") or {}
-        u2 = bool(usb2.get("present"))
-        u3 = bool(usb3.get("present"))
-        _txt(img, 2, 40, "USB2", GREEN if u2 else RED, size="normal")
-        _txt(img, 34, 40, "USB3", GREEN if u3 else RED, size="normal")
-        online = bool(m.get("wan_online"))
-        _txt(img, 2, 54, "WAN", DIM, size="tiny", alert=not online)
-        if online or not _ALERT_BLINK or _blink_on():
-            d.ellipse([22, 54, 28, 60], fill=GREEN if online else RED)
-
-    elif sid == "CLI":
-        # Active clients: totals + band + top SSIDs
-        total = int(m.get("clients", 0) or 0)
-        wifi = int(m.get("clients_wifi", 0) or 0)
-        wired = int(m.get("clients_wired", 0) or max(0, total - wifi))
-        n2 = int(m.get("clients_2g", 0) or 0)
-        n5 = int(m.get("clients_5g", 0) or 0)
-        _txt(img, 2, 11, f"All {total}", FG, size="tiny")
-        _txt(img, 2, 19, f"WiFi {wifi}", CYAN, size="tiny")
-        _txt(img, 34, 19, f"LAN {wired}", ORANGE, size="tiny")
-        _txt(img, 2, 28, f"2G {n2}", GREEN, size="tiny")
-        _txt(img, 34, 28, f"5G {n5}", YELLOW, size="tiny")
-        d.line([(2, 36), (61, 36)], fill=DIM)
-        y = 39
-        ssids = list(m.get("clients_ssid") or [])
-        if not ssids:
-            _txt(img, 2, y, "no SSID", DIM, size="tiny")
-        for row in ssids[:3]:
-            try:
-                name = str(row.get("ssid", "?"))
-                n = int(row.get("n", 0))
-            except (AttributeError, TypeError, ValueError):
-                continue
-            _txt(img, 2, y, _scroll(name, 8), FG, size="tiny")
-            _txt(img, 50, y, str(n), CYAN, size="tiny")
-            y += 8
+            _txt(img, 28, y, "off", RED, size="tiny", role="status")
 
     else:
-        _txt(img, 2, 20, sid[:8], DIM, size="tiny")
+        _txt(img, 2, 20, sid[:8], DIM, size="tiny", role="label")
 
     if m.get("_demo") or m.get("_offline"):
         tag = "DEMO" if m.get("_demo") else "OFF"
-        _txt(img, 40, 57, tag, YELLOW, size="tiny", alert=bool(m.get("_offline")))
+        _txt(img, 40, 57, tag, YELLOW, size="tiny", role="value", alert=bool(m.get("_offline")))
 
     return img
 
@@ -704,8 +659,8 @@ def render_boot_banner(msg: str = "PIXOO OK") -> Image.Image:
     d = ImageDraw.Draw(img)
     d.rectangle([0, 0, 63, 9], fill=HEADER)
     pf.draw_text(img, 4, 1, "PIXOO", HEADER_FG, size="normal")
-    _txt(img, 6, 22, msg[:10], ORANGE, size="normal")
-    _txt(img, 4, 36, "Merlin bridge", FG, size="tiny")
+    _txt(img, 6, 22, msg[:10], ORANGE, size="normal", role="value")
+    _txt(img, 4, 36, "Merlin bridge", FG, size="tiny", role="value")
     for y in range(48, 64):
         for x in range(48, 64):
             if (x + y) & 1:

@@ -421,18 +421,18 @@ visual_defaults() {
 }
 
 # Canonical screen ids (must match pixoo_bridge.render.ALL_SCREEN_IDS)
-ALL_PIXOO_SCREENS=(SYS GRP TOP TMP PIE SRV NET CLI LOD WLC)
+ALL_PIXOO_SCREENS=(SYS LOD TMP GRP WLC TOP CLI NET PIE SRV)
 ALL_PIXOO_SCREEN_LABELS=(
   "SYS System"
-  "GRP Traffic"
-  "TOP Top"
-  "TMP Temps"
-  "PIE Disk Space"
-  "SRV Services"
-  "NET Ports"
-  "CLI Clients"
   "LOD Load CPU/Temp"
+  "TMP Temps"
+  "GRP Traffic WAN"
   "WLC WiFi/LAN traffic"
+  "TOP Top clients"
+  "CLI Clients"
+  "NET Ports"
+  "PIE Disk"
+  "SRV Services"
 )
 
 print_visual_profile() {
@@ -1554,7 +1554,7 @@ Env / .deploy.env:
   PIXOO_ALERT_BLINK  1|0 blink critical text/gauges (default 1)
   PIXOO_BLINK_PERIOD half-cycle seconds for blink (default 0.55)
   PIXOO_RATE_STYLE   short|long (K/M/G vs Kb/s)
-  PIXOO_SCREENS       all or SYS,GRP,TOP,TMP,PIE,SRV,NET,CLI,LOD,WLC
+  PIXOO_SCREENS       all or SYS,LOD,TMP,GRP,WLC,TOP,CLI,NET,PIE,SRV
 
 Pixoo display: auto install starts pixoo_bridge ON Merlin (Entware).
 Logs: ${REMOTE_PATH:-/jffs/addons/pico_monitor}/logs/pixoo_bridge.log
