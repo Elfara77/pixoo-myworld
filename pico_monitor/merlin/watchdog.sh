@@ -1,5 +1,9 @@
 #!/bin/sh
 # start | stop | reload | status for pico metrics server
+# Invoked by cru + services-start.
+#
+# BusyBox ash may lack `command` — never use `command -v`.
+# Resolve ROOT before any Entware profile (mydisk.sh may cd to AMTM).
 set -eu
 
 _case0=$0
@@ -10,14 +14,15 @@ esac
 ROOT="$(CDPATH= cd -- "$(dirname "${_script}")" && pwd)"
 unset _case0 _script
 
-export PATH="/opt/bin:/opt/sbin:/opt/usr/bin:${PATH}"
-if [ -f /opt/etc/profile ]; then
-  # shellcheck disable=SC1091
-  . /opt/etc/profile
-fi
+# Entware binaries without sourcing noisy /opt/etc/profile
+export PATH="/opt/bin:/opt/sbin:/opt/usr/bin:/bin:/sbin:/usr/bin:/usr/sbin:${PATH}"
 
-PYTHON="$(command -v python3 2>/dev/null || true)"
-[ -z "${PYTHON}" ] && [ -x /opt/bin/python3 ] && PYTHON="/opt/bin/python3"
+PYTHON=""
+if [ -x /opt/bin/python3 ]; then
+  PYTHON="/opt/bin/python3"
+elif [ -x /opt/usr/bin/python3 ]; then
+  PYTHON="/opt/usr/bin/python3"
+fi
 
 RUN_DIR="${ROOT}/run"
 LOG_DIR="${ROOT}/logs"
@@ -44,8 +49,13 @@ stop_daemon() {
     fi
   fi
   rm -f "${PIDFILE}"
-  if command -v pgrep >/dev/null 2>&1; then
-    for p in $(pgrep -f "metrics_server.py" 2>/dev/null || true); do
+  # Best-effort cleanup without pgrep/command -v
+  if [ -x /opt/bin/pgrep ]; then
+    for p in $(/opt/bin/pgrep -f "metrics_server.py" 2>/dev/null || true); do
+      kill "${p}" 2>/dev/null || true
+    done
+  elif [ -x /usr/bin/pgrep ]; then
+    for p in $(/usr/bin/pgrep -f "metrics_server.py" 2>/dev/null || true); do
       kill "${p}" 2>/dev/null || true
     done
   fi
@@ -57,7 +67,7 @@ start_daemon() {
     return 0
   }
   [ -n "${PYTHON}" ] && [ -x "${PYTHON}" ] || {
-    echo "error: python3 missing" >&2
+    echo "error: python3 missing (expected /opt/bin/python3)" >&2
     return 1
   }
   cd "${ROOT}"

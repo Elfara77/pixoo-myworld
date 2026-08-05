@@ -10,14 +10,14 @@ esac
 ROOT="$(CDPATH= cd -- "$(dirname "${_script}")" && pwd)"
 unset _case0 _script
 
-export PATH="/opt/bin:/opt/sbin:/opt/usr/bin:${PATH}"
-if [ -f /opt/etc/profile ]; then
-  # shellcheck disable=SC1091
-  . /opt/etc/profile
-fi
+export PATH="/opt/bin:/opt/sbin:/opt/usr/bin:/bin:/sbin:/usr/bin:/usr/sbin:${PATH}"
 
-PYTHON="$(command -v python3 2>/dev/null || true)"
-[ -z "${PYTHON}" ] && [ -x /opt/bin/python3 ] && PYTHON="/opt/bin/python3"
+PYTHON=""
+if [ -x /opt/bin/python3 ]; then
+  PYTHON="/opt/bin/python3"
+elif [ -x /opt/usr/bin/python3 ]; then
+  PYTHON="/opt/usr/bin/python3"
+fi
 
 cd "${ROOT}"
 if [ -f "${ROOT}/config.env" ]; then

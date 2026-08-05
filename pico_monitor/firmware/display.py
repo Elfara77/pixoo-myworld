@@ -52,6 +52,7 @@ def clear():
 
 
 def show():
+    """Push buffer to OLED. No-op for host software FB (preview reads _fb)."""
     if _oled is not None:
         _oled.show()
 
@@ -59,6 +60,13 @@ def show():
 def set_blink(on):
     global _blink
     _blink = bool(on)
+
+
+def ensure_fb(width=64, height=64):
+    """Guarantee a framebuffer exists (host preview / failed I2C)."""
+    if _fb is None:
+        init(None, width, height)
+    return _fb
 
 
 def draw_header_inverted(title, page_idx, pages=6):
@@ -292,9 +300,38 @@ def draw_progress_ring(x, y, size, percent, thickness=2):
                     _fb.pixel(px, py, 1)
 
 
-def draw_offline_banner(msg="ROUTER OFFLINE"):
+def draw_status_banner(msg="OFFLINE"):
+    """Full-screen status — always visible when OLED I2C works.
+
+    Uses NORMAL 5x7 (tiny font is units-only historically). Split long
+    messages across two centered lines so letters are never blank gaps.
+    """
+    ensure_fb()
     clear()
-    _fb.fill_rect(0, 24, 64, 16, 1 if not _blink else 0)
-    col = 0 if not _blink else 1
-    fonts.draw_tiny(_fb, 4, 28, msg[:14], col)
+    _fb.fill_rect(0, 0, 64, 10, 1)
+    fonts.draw_normal(_fb, 2, 2, "PICO", 0)
+
+    text = (msg or "ERROR").upper().replace("_", " ")
+    # Prefer short readable phrases
+    if text in ("ROUTER OFFLINE", "OFFLINE", "HTTP FAIL"):
+        line1, line2 = "ROUTER", "OFFLINE"
+    elif " " in text and len(text) > 9:
+        parts = text.split(" ", 1)
+        line1, line2 = parts[0][:10], parts[1][:10]
+    else:
+        line1, line2 = text[:10], ""
+
+    on = not _blink
+    _fb.fill_rect(0, 20, 64, 28, 1 if on else 0)
+    col = 0 if on else 1
+    tw1 = fonts.text_width_normal(line1)
+    fonts.draw_normal(_fb, max(1, (64 - tw1) // 2), 24, line1, col)
+    if line2:
+        tw2 = fonts.text_width_normal(line2)
+        fonts.draw_normal(_fb, max(1, (64 - tw2) // 2), 34, line2, col)
+    fonts.draw_tiny(_fb, 10, 54, "CHECK WIFI", 1)
     show()
+
+
+def draw_offline_banner(msg="ROUTER OFFLINE"):
+    draw_status_banner(msg)
