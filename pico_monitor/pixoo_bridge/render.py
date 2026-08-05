@@ -799,10 +799,10 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         ]
         for x, y, label, val in cells:
             hot = _is_crit_temp_tile(val)
-            col = _temp_tile_color(val)
-            outline = RED if (hot and (not _ALERT_BLINK or _blink_on())) else DIM
+            col = RED if hot else _temp_tile_color(val)
+            outline = RED if hot else DIM
             d.rectangle([x, y, x + 31, y + 24], outline=outline)
-            _txt(img, x + 2, y + 2, label, LABEL, size="tiny", role="label", alert=hot)
+            _txt(img, x + 2, y + 2, label, LABEL, size="tiny", role="label")
             _draw_val_unit(
                 img,
                 x + 2,
@@ -813,7 +813,6 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
                 size="normal",
                 unit_size="normal",
                 value_role="status",
-                alert=hot,
             )
 
     elif sid == "GRP":
