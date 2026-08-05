@@ -155,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--screens",
         default=env.get("PIXOO_SCREENS", "all"),
-        help="Active screens: all or SYS,LOD,TMP,GRP,WLC,TOP,CLI,NET,PIE,SRV",
+        help="Active screens: all (no SUM), all,SUM, SUM alone, or SYS,LOD,...",
     )
     ap.add_argument(
         "--log",

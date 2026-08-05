@@ -420,7 +420,8 @@ visual_defaults() {
   PIXOO_SCREENS="all"
 }
 
-# Canonical screen ids (must match pixoo_bridge.render.ALL_SCREEN_IDS)
+# Canonical screen ids (must match pixoo_bridge.render)
+# ALL_PIXOO_SCREENS = default "all" rotation (SUM excluded)
 ALL_PIXOO_SCREENS=(SYS LOD TMP GRP WLC TOP CLI NET PIE SRV)
 ALL_PIXOO_SCREEN_LABELS=(
   "SYS System"
@@ -433,6 +434,11 @@ ALL_PIXOO_SCREEN_LABELS=(
   "NET Ports"
   "PIE Disk"
   "SRV Services"
+)
+# Optional (not in "all") — pick explicitly or all,SUM
+OPT_PIXOO_SCREENS=(SUM)
+OPT_PIXOO_SCREEN_LABELS=(
+  "SUM Summary health (opt, no banner)"
 )
 
 print_visual_profile() {
@@ -538,15 +544,17 @@ configure_visual() {
 }
 
 # Interactive screen picker — all or ≥1. Updates PIXOO_SCREENS.
+# SUM is optional and never part of bare "all".
 configure_screens() {
   echo "╔══════════════════════════════════════════╗"
   echo "║  Sélection des écrans Pixoo              ║"
   echo "╚══════════════════════════════════════════╝"
-  echo "  all = tous · au moins 1 requis · points bannière = nb écrans (>1)"
+  echo "  all = défauts (sans SUM) · SUM = résumé optionnel · ≥1 requis"
   echo ""
 
-  local -a on=()
+  local -a on=() pick=()
   local i sid label tok
+  pick=("${ALL_PIXOO_SCREENS[@]}" "${OPT_PIXOO_SCREENS[@]}")
   # Seed from current PIXOO_SCREENS
   if [[ -z "${PIXOO_SCREENS}" || "${PIXOO_SCREENS}" == "all" ]]; then
     on=("${ALL_PIXOO_SCREENS[@]}")
@@ -554,7 +562,15 @@ configure_screens() {
     IFS=',' read -r -a tok <<< "${PIXOO_SCREENS}"
     for sid in "${tok[@]}"; do
       sid="$(echo "${sid}" | tr '[:lower:]' '[:upper:]' | tr -d ' ')"
-      [[ -n "${sid}" ]] && on+=("${sid}")
+      if [[ "${sid}" == "ALL" ]]; then
+        for x in "${ALL_PIXOO_SCREENS[@]}"; do
+          local found=0
+          for y in "${on[@]}"; do [[ "${y}" == "${x}" ]] && found=1; done
+          (( found )) || on+=("${x}")
+        done
+      elif [[ -n "${sid}" ]]; then
+        on+=("${sid}")
+      fi
     done
   fi
 
@@ -575,19 +591,23 @@ configure_screens() {
 
   while true; do
     echo "  Écrans (x = actif) :"
-    for i in "${!ALL_PIXOO_SCREENS[@]}"; do
-      sid="${ALL_PIXOO_SCREENS[$i]}"
-      label="${ALL_PIXOO_SCREEN_LABELS[$i]}"
+    for i in "${!pick[@]}"; do
+      sid="${pick[$i]}"
+      if (( i < ${#ALL_PIXOO_SCREENS[@]} )); then
+        label="${ALL_PIXOO_SCREEN_LABELS[$i]}"
+      else
+        label="${OPT_PIXOO_SCREEN_LABELS[$((i - ${#ALL_PIXOO_SCREENS[@]}))]}"
+      fi
       if _screen_on "${sid}"; then
         printf '   %d) [x] %s\n' "$((i + 1))" "${label}"
       else
         printf '   %d) [ ] %s\n' "$((i + 1))" "${label}"
       fi
     done
-    echo "   a) tous   n) aucun (puis en choisir ≥1)   d) done"
+    echo "   a) défauts (sans SUM)   n) aucun   d) done"
     echo ""
     local c
-    read -r -p "Toggle [1-${#ALL_PIXOO_SCREENS[@]}/a/n/d]: " c
+    read -r -p "Toggle [1-${#pick[@]}/a/n/d]: " c
     c="${c:-d}"
     case "${c}" in
       a|A|all)
@@ -604,8 +624,8 @@ configure_screens() {
         break
         ;;
       *)
-        if [[ "${c}" =~ ^[0-9]+$ ]] && (( c >= 1 && c <= ${#ALL_PIXOO_SCREENS[@]} )); then
-          _screen_toggle "${ALL_PIXOO_SCREENS[$((c - 1))]}"
+        if [[ "${c}" =~ ^[0-9]+$ ]] && (( c >= 1 && c <= ${#pick[@]} )); then
+          _screen_toggle "${pick[$((c - 1))]}"
         else
           echo "  ?"
         fi
@@ -614,8 +634,22 @@ configure_screens() {
     echo ""
   done
 
-  if (( ${#on[@]} == ${#ALL_PIXOO_SCREENS[@]} )); then
-    PIXOO_SCREENS="all"
+  # Encode: bare defaults → all ; defaults+SUM → all,SUM ; else explicit list
+  local -a defs=() extras=()
+  local x found
+  for x in "${on[@]}"; do
+    found=0
+    for sid in "${ALL_PIXOO_SCREENS[@]}"; do
+      if [[ "${x}" == "${sid}" ]]; then found=1; break; fi
+    done
+    if (( found )); then defs+=("${x}"); else extras+=("${x}"); fi
+  done
+  if (( ${#defs[@]} == ${#ALL_PIXOO_SCREENS[@]} )); then
+    if (( ${#extras[@]} == 0 )); then
+      PIXOO_SCREENS="all"
+    else
+      PIXOO_SCREENS="all,$(IFS=,; echo "${extras[*]}")"
+    fi
   else
     PIXOO_SCREENS="$(IFS=,; echo "${on[*]}")"
   fi
@@ -1554,7 +1588,7 @@ Env / .deploy.env:
   PIXOO_ALERT_BLINK  1|0 blink critical text/gauges (default 1)
   PIXOO_BLINK_PERIOD half-cycle seconds for blink (default 0.55)
   PIXOO_RATE_STYLE   short|long (K/M/G vs Kb/s)
-  PIXOO_SCREENS       all or SYS,LOD,TMP,GRP,WLC,TOP,CLI,NET,PIE,SRV
+  PIXOO_SCREENS       all | all,SUM | SUM | SYS,LOD,... (SUM = résumé opt., hors défaut)
 
 Pixoo display: auto install starts pixoo_bridge ON Merlin (Entware).
 Logs: ${REMOTE_PATH:-/jffs/addons/pico_monitor}/logs/pixoo_bridge.log

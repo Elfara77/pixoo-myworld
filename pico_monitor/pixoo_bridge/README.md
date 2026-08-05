@@ -45,9 +45,9 @@ cd pico_monitor
 | `PIXOO_HEAVY_SCREEN_MULTIPLIER` / `--heavy-screen-multiplier` | `2` | Multiplicateur sur les écrans « lourds » (graphes, listes) |
 | `PIXOO_FRAME_INTERVAL` / `--frame-interval` | `1.05` | Intervalle minimum entre pushes HTTP |
 | `PIXOO_BRIGHTNESS` / `--brightness` | `50` | Luminosité Pixoo 0–100 |
-| `PIXOO_SCREENS` / `--screens` | `all` | `all` ou `SYS,LOD,TMP,GRP,WLC,TOP,CLI,NET,PIE,SRV` (≥1). Pastille position (chiffre cyan sur fond noir) si >1 écran. |
+| `PIXOO_SCREENS` / `--screens` | `all` | `all` = défauts **sans SUM**. Optionnel : `SUM` (résumé santé, sans bannière), seul ou mélangé (`all,SUM` / `SUM,SYS,…`). Pastille position si >1 écran (sauf SUM qui n’a pas de bannière). |
 
-Ordre logique : System → Load → Temps → Traffic → WiFi/LAN → Top → Clients → Ports → Disk → Services.
+Ordre logique défaut : System → Load → Temps → Traffic → WiFi/LAN → Top → Clients → Ports → Disk → Services. **SUM** = écran résumé HP% (CPU/RAM/TMP/DSK + trafic + clients + ports), non inclus dans `all`.
 
 ## Probe
 

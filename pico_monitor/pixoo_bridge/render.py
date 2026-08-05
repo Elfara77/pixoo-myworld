@@ -32,8 +32,10 @@ HEADER_FG = (6, 8, 14)
 TEXT_MONO = (255, 255, 255)
 MONO_DIM = (130, 130, 130)
 
-# Logical rotation order
+# Default rotation ("all") — SUM is optional and never included by default.
 ALL_SCREEN_IDS = ("SYS", "LOD", "TMP", "GRP", "WLC", "TOP", "CLI", "NET", "PIE", "SRV")
+OPTIONAL_SCREEN_IDS = ("SUM",)
+KNOWN_SCREEN_IDS = ALL_SCREEN_IDS + OPTIONAL_SCREEN_IDS
 SCREEN_TITLES = {
     "SYS": "System",
     "LOD": "Load",
@@ -45,6 +47,7 @@ SCREEN_TITLES = {
     "NET": "Ports",
     "PIE": "Disk",
     "SRV": "Services",
+    "SUM": "Summary",
 }
 
 _ACTIVE_SCREENS: list[str] = list(ALL_SCREEN_IDS)
@@ -67,7 +70,7 @@ WARN_DISK = 70.0
 _RATE_STYLE = "short"
 
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
-HEAVY_SCREEN_IDS = frozenset({"LOD", "GRP", "WLC", "TOP", "CLI", "TMP"})
+HEAVY_SCREEN_IDS = frozenset({"LOD", "GRP", "WLC", "TOP", "CLI", "TMP", "SUM"})
 _HEAVY_DWELL = True
 _HEAVY_DWELL_MULT = 2.0
 
@@ -85,16 +88,24 @@ def get_screen_ids() -> tuple[str, ...]:
 
 
 def set_screens(spec: str | None) -> tuple[str, ...]:
+    """Parse screen list. ``all`` = defaults only (no SUM). ``all,SUM`` or ``SUM`` OK."""
     global SCREEN_IDS, _ACTIVE_SCREENS
-    if spec is None or not str(spec).strip() or str(spec).strip().lower() in ("all", "*", "default"):
-        _ACTIVE_SCREENS = list(ALL_SCREEN_IDS)
-        SCREEN_IDS = tuple(_ACTIVE_SCREENS)
-        return SCREEN_IDS
+    raw = "" if spec is None else str(spec).strip()
+    if not raw or raw.lower() in ("*", "default"):
+        raw = "all"
+    tokens = [t.strip().upper() for t in raw.replace(";", ",").replace(" ", ",").split(",") if t.strip()]
     wanted: list[str] = []
-    for tok in str(spec).replace(";", ",").replace(" ", ",").split(","):
-        sid = tok.strip().upper()
-        if sid in ALL_SCREEN_IDS and sid not in wanted:
-            wanted.append(sid)
+    if any(t in ("ALL", "DEFAULT") for t in tokens):
+        wanted = list(ALL_SCREEN_IDS)
+        for sid in tokens:
+            if sid in ("ALL", "DEFAULT"):
+                continue
+            if sid in KNOWN_SCREEN_IDS and sid not in wanted:
+                wanted.append(sid)
+    else:
+        for sid in tokens:
+            if sid in KNOWN_SCREEN_IDS and sid not in wanted:
+                wanted.append(sid)
     _ACTIVE_SCREENS = wanted if wanted else list(ALL_SCREEN_IDS)
     SCREEN_IDS = tuple(_ACTIVE_SCREENS)
     return SCREEN_IDS
@@ -424,12 +435,171 @@ def _active_vpns(m: dict[str, Any]) -> list[tuple[str, str]]:
     return out
 
 
+def _disk_used_pct(m: dict[str, Any]) -> float:
+    """Worst disk fill among JFFS / USB mounts present."""
+    vals: list[float] = []
+    jffs = m.get("jffs") or {}
+    if jffs.get("present", True) or jffs.get("used") is not None:
+        vals.append(float(jffs.get("used", 0) or 0))
+    for key in ("usb", "usb2", "usb3"):
+        u = m.get(key) or {}
+        if u.get("present"):
+            vals.append(float(u.get("used", 0) or 0))
+    return max(vals) if vals else 0.0
+
+
+def _temp_score(temp: float, *, kind: str = "temp_cpu") -> float:
+    """0–100 health from temperature (high temp → low score)."""
+    t = float(temp or 0)
+    if kind == "temp_cpu":
+        warn, crit = float(WARN_TEMP_CPU), float(CRIT_TEMP_CPU)
+        cool = 45.0
+    else:
+        warn, crit = float(WARN_TEMP_RADIO), float(CRIT_TEMP_RADIO)
+        cool = 40.0
+    if t <= 0:
+        return 100.0
+    if t <= cool:
+        return 100.0
+    if t >= crit:
+        return 0.0
+    if t >= warn:
+        return max(0.0, 40.0 * (crit - t) / max(1.0, crit - warn))
+    return 100.0 - 40.0 * (t - cool) / max(1.0, warn - cool)
+
+
+def _health_color(score: float) -> tuple[int, int, int]:
+    s = float(score or 0)
+    if s >= 80:
+        return GREEN
+    if s >= 60:
+        return YELLOW
+    if s >= 40:
+        return ORANGE
+    return RED
+
+
+def _health_score(m: dict[str, Any]) -> int:
+    """Composite router health 0–100 from CPU, RAM, temps, disk, WAN."""
+    cpu = float(m.get("cpu", 0) or 0)
+    ram = float(m.get("ram", 0) or 0)
+    t_cpu = float(m.get("temp_cpu", 0) or 0)
+    t_avg = float(m.get("temp_avg", 0) or _temp_avg(m))
+    disk = _disk_used_pct(m)
+    online = bool(m.get("wan_online"))
+
+    cpu_s = max(0.0, 100.0 - cpu)
+    ram_s = max(0.0, 100.0 - ram)
+    temp_s = min(_temp_score(t_cpu, kind="temp_cpu"), _temp_score(t_avg, kind="temp"))
+    disk_s = max(0.0, 100.0 - disk)
+    wan_s = 100.0 if online else 0.0
+
+    score = (
+        0.25 * cpu_s
+        + 0.20 * ram_s
+        + 0.30 * temp_s
+        + 0.15 * disk_s
+        + 0.10 * wan_s
+    )
+    return int(round(max(0.0, min(100.0, score))))
+
+
+def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
+    """Full-bleed summary (no title banner): health + key live metrics."""
+    hp = _health_score(m)
+    hp_col = _health_color(hp)
+    alert_hp = hp < 40
+    _txt(img, 1, 1, "HP", LABEL, size="tiny", role="label", alert=alert_hp)
+    _draw_val_unit(img, 12, 0, str(hp), "%", hp_col, size="normal", alert=alert_hp)
+    online = bool(m.get("wan_online"))
+    if online or not _ALERT_BLINK or _blink_on():
+        d.ellipse([57, 1, 62, 6], fill=GREEN if online else RED)
+    _gauge(d, 1, 9, 62, hp, hp_col, alert=alert_hp)
+
+    cpu = float(m.get("cpu", 0) or 0)
+    ram = float(m.get("ram", 0) or 0)
+    tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
+    disk = _disk_used_pct(m)
+
+    y = 15
+    for label, val, kind, unit in (
+        ("CPU", cpu, "load", "%"),
+        ("RAM", ram, "load", "%"),
+        ("TMP", tmp, "temp_cpu", "°C"),
+        ("DSK", disk, "disk", "%"),
+    ):
+        col = _level_color(val, kind=kind)
+        alert = (
+            _is_crit_load(val)
+            if kind == "load"
+            else (_is_crit_disk(val) if kind == "disk" else _is_crit_temp("CPU" if kind == "temp_cpu" else "TMP", int(val)))
+        )
+        _txt(img, 1, y, label, LABEL, size="tiny", role="label", alert=alert)
+        _draw_val_unit(img, 16, y, str(int(val)), unit, col, size="tiny", alert=alert)
+        bar_pct = val if kind != "temp_cpu" else min(100.0, (val / max(float(CRIT_TEMP_CPU), 1.0)) * 100.0)
+        _gauge(d, 36, y + 1, 27, bar_pct, col, alert=alert)
+        y += 6
+
+    _txt(img, 1, y, "Dn", LABEL, size="tiny", role="label")
+    dn, du = _split_rate(m.get("wan_down", 0))
+    x = _draw_val_unit(img, 12, y, dn, du, GRAPH_DOWN, size="tiny")
+    _txt(img, min(x + 2, 34), y, "Up", LABEL, size="tiny", role="label")
+    un, uu = _split_rate(m.get("wan_up", 0))
+    _draw_val_unit(img, min(x + 12, 44), y, un, uu, GRAPH_UP, size="tiny")
+    y += 6
+
+    clients = int(m.get("clients", 0) or 0)
+    wifi = int(m.get("clients_wifi", 0) or 0)
+    _txt(img, 1, y, "Cli", LABEL, size="tiny", role="label")
+    _txt(img, 14, y, str(clients), FG, size="tiny", role="value")
+    _txt(img, 28, y, "Wi", LABEL, size="tiny", role="label")
+    _txt(img, 38, y, str(wifi), CYAN, size="tiny", role="value")
+    vpns = _active_vpns(m)
+    if vpns:
+        _txt(img, 48, y, "V", GREEN, size="tiny", role="status")
+    y += 6
+
+    ports = list(m.get("lan_ports") or [False, False, False, False])[:4]
+    while len(ports) < 4:
+        ports.append(False)
+    _txt(img, 1, y, "L", LABEL, size="tiny", role="label")
+    x = 8
+    for i, up in enumerate(ports, start=1):
+        _txt(img, x, y, str(i), GREEN if up else RED, size="tiny", role="status")
+        x += 6
+    usb2 = m.get("usb2") or {}
+    usb3 = m.get("usb3") or {}
+    usb = m.get("usb") or {}
+    u2 = bool(usb2.get("present") or usb.get("present"))
+    u3 = bool(usb3.get("present"))
+    _txt(img, 34, y, "U2", GREEN if u2 else RED, size="tiny", role="status")
+    _txt(img, 48, y, "U3", GREEN if u3 else RED, size="tiny", role="status")
+    y += 6
+
+    tops = _pick_top(m.get("top_down"), limit=1)
+    if tops:
+        name, rate = tops[0]
+        _txt(img, 1, y, _scroll(name, 7), FG, size="tiny", role="value")
+        dn, du = _split_rate(rate)
+        _draw_val_unit(img, 38, y, dn, du, GRAPH_DOWN, size="tiny")
+    else:
+        uptime = str(m.get("uptime_str", "--"))[:8]
+        _txt(img, 1, y, "up", LABEL, size="tiny", role="label")
+        _txt(img, 12, y, uptime, FG, size="tiny", role="value")
+
+
 def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
     screens = get_screen_ids() or ALL_SCREEN_IDS
     idx = idx % len(screens)
     sid = screens[idx]
     img = Image.new("RGB", (64, 64), BG)
     d = ImageDraw.Draw(img)
+    if sid == "SUM":
+        _render_sum(img, d, m)
+        if m.get("_offline"):
+            _txt(img, 48, 58, "OFF", YELLOW, size="tiny", role="value", alert=True)
+        return img
+
     _header(img, d, SCREEN_TITLES.get(sid, sid), idx)
 
     if sid == "SYS":
