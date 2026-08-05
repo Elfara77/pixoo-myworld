@@ -34,6 +34,7 @@ from pixoo_bridge.render import (
     get_screen_ids,
     render_boot_banner,
     render_screen,
+    screen_dwell_seconds,
     set_render_options,
     _demo_metrics,
 )
@@ -101,7 +102,18 @@ def main(argv: list[str] | None = None) -> int:
         "--screen-seconds",
         type=float,
         default=float(env.get("PIXOO_SCREEN_SECONDS", "8")),
-        help="Seconds per screen (old Pixoo default ~8)",
+        help="Base seconds per screen (heavy screens use × multiplier when enabled)",
+    )
+    ap.add_argument(
+        "--heavy-screen-dwell",
+        default=env.get("PIXOO_HEAVY_SCREEN_DWELL", "1"),
+        help="1=longer dwell on graph/dense screens (default), 0=same as --screen-seconds for all",
+    )
+    ap.add_argument(
+        "--heavy-screen-multiplier",
+        type=float,
+        default=float(env.get("PIXOO_HEAVY_SCREEN_MULTIPLIER", "2")),
+        help="Dwell multiplier for heavy screens (default 2)",
     )
     ap.add_argument(
         "--frame-interval",
@@ -154,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
 
     scroll_on = str(args.text_scroll).strip().lower() in ("1", "true", "yes", "on")
     blink_on = str(args.alert_blink).strip().lower() in ("1", "true", "yes", "on")
+    heavy_dwell = str(args.heavy_screen_dwell).strip().lower() in ("1", "true", "yes", "on")
     set_render_options(
         color_mode=args.color_mode,
         text_scroll=scroll_on,
@@ -161,17 +174,21 @@ def main(argv: list[str] | None = None) -> int:
         blink_period_s=args.blink_period,
         rate_style=args.rate_style,
         screens=args.screens,
+        heavy_screen_dwell=heavy_dwell,
+        heavy_screen_multiplier=args.heavy_screen_multiplier,
     )
     screens = get_screen_ids()
 
     _setup_logging(args.log)
     LOG.info(
-        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s frame_s=%s color=%s scroll=%s blink=%s rate=%s screens=%s",
+        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s heavy_dwell=%s heavy_x=%s frame_s=%s color=%s scroll=%s blink=%s rate=%s screens=%s",
         args.pixoo,
         args.metrics,
         args.demo,
         args.brightness,
         args.screen_seconds,
+        heavy_dwell,
+        args.heavy_screen_multiplier,
         args.frame_interval,
         args.color_mode,
         scroll_on,
@@ -234,14 +251,18 @@ def main(argv: list[str] | None = None) -> int:
                 m["_offline"] = True
                 offline = True
 
-        if time.monotonic() - screen_t0 >= max(1.0, args.screen_seconds):
+        screen_i = screen_i % len(screens)
+        cur_sid = screens[screen_i]
+        dwell = screen_dwell_seconds(cur_sid, args.screen_seconds)
+        if time.monotonic() - screen_t0 >= dwell:
             screen_i = (screen_i + 1) % len(screens)
             screen_t0 = time.monotonic()
             LOG.info(
-                "screen → %s (%d/%d)%s",
+                "screen → %s (%d/%d) dwell=%.1fs%s",
                 screens[screen_i],
                 screen_i + 1,
                 len(screens),
+                screen_dwell_seconds(screens[screen_i], args.screen_seconds),
                 " [offline-demo]" if offline else "",
             )
 

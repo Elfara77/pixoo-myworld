@@ -66,6 +66,19 @@ WARN_DISK = 70.0
 
 _RATE_STYLE = "short"
 
+# Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
+HEAVY_SCREEN_IDS = frozenset({"LOD", "GRP", "WLC", "TOP", "CLI", "TMP"})
+_HEAVY_DWELL = True
+_HEAVY_DWELL_MULT = 2.0
+
+
+def screen_dwell_seconds(screen_id: str, base_seconds: float) -> float:
+    """Seconds to show `screen_id`; heavy screens use base × multiplier when enabled."""
+    base = max(1.0, float(base_seconds))
+    if _HEAVY_DWELL and screen_id in HEAVY_SCREEN_IDS:
+        return max(1.0, base * _HEAVY_DWELL_MULT)
+    return base
+
 
 def get_screen_ids() -> tuple[str, ...]:
     return tuple(_ACTIVE_SCREENS)
@@ -95,8 +108,11 @@ def set_render_options(
     blink_period_s: float | None = None,
     rate_style: str | None = None,
     screens: str | None = None,
+    heavy_screen_dwell: bool | None = None,
+    heavy_screen_multiplier: float | None = None,
 ) -> None:
     global _COLOR_MODE, _TEXT_SCROLL, _ALERT_BLINK, _BLINK_PERIOD_S, _RATE_STYLE
+    global _HEAVY_DWELL, _HEAVY_DWELL_MULT
     if color_mode is not None:
         mode = color_mode.strip().lower()
         if mode in ("mono", "monochrome", "bw"):
@@ -116,6 +132,10 @@ def set_render_options(
         _RATE_STYLE = "long" if rs in ("long", "full", "verbose") else "short"
     if screens is not None:
         set_screens(screens)
+    if heavy_screen_dwell is not None:
+        _HEAVY_DWELL = bool(heavy_screen_dwell)
+    if heavy_screen_multiplier is not None:
+        _HEAVY_DWELL_MULT = max(1.0, float(heavy_screen_multiplier))
 
 
 def _blink_on() -> bool:
