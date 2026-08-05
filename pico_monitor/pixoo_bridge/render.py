@@ -402,6 +402,50 @@ def _graph(img, draw, x, y, w, h, data, color, filled: bool = False) -> None:
         draw.line(pts, fill=color, width=1)
 
 
+def _graph_up_down(
+    img,
+    draw,
+    x,
+    y,
+    w,
+    h,
+    down,
+    up,
+    col_down,
+    col_up,
+    *,
+    fill_down: bool = True,
+) -> None:
+    """Down + up on one panel with shared vertical scale."""
+    down = list(down or [])
+    up = list(up or [])
+    if not down and not up:
+        _txt(img, x + 4, y + max(0, h // 2 - 3), "NO DATA", DIM, size="tiny", role="label")
+        return
+
+    def _pts(series: list[float]) -> list[tuple[int, int]]:
+        if not series:
+            return []
+        mx = max(max(down, default=0), max(up, default=0), 0.01)
+        out: list[tuple[int, int]] = []
+        n = len(series)
+        for i, v in enumerate(series):
+            px = x + int(i * (w - 1) / max(1, n - 1))
+            py = y + h - 1 - int(max(0.0, min(1.0, float(v) / mx)) * (h - 1))
+            out.append((px, py))
+        return out
+
+    d_pts = _pts(down)
+    u_pts = _pts(up)
+    if fill_down and len(d_pts) >= 2:
+        poly = d_pts + [(d_pts[-1][0], y + h - 1), (d_pts[0][0], y + h - 1)]
+        draw.polygon(poly, fill=(col_down[0] // 3, col_down[1] // 3, col_down[2] // 3))
+    if len(d_pts) >= 2:
+        draw.line(d_pts, fill=col_down, width=1)
+    if len(u_pts) >= 2:
+        draw.line(u_pts, fill=col_up, width=1)
+
+
 def _demo_metrics() -> dict[str, Any]:
     import math
     import time
@@ -730,21 +774,23 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
 
     elif sid == "WLC":
         w_down = list(m.get("wifi_history_down") or [])
+        w_up = list(m.get("wifi_history_up") or [])
         eth_down = list(m.get("lan_history_down") or [])
+        eth_up = list(m.get("lan_history_up") or [])
         _txt(img, 2, 11, "WiFi", LABEL, size="tiny", role="label")
         dn, du = _split_rate(m.get("wifi_down", 0))
         x = _draw_val_unit(img, 20, 11, dn, du, GRAPH_DOWN, size="tiny")
         _txt(img, min(x + 2, 40), 11, "Up", LABEL, size="tiny", role="label")
         un, uu = _split_rate(m.get("wifi_up", 0))
         _draw_val_unit(img, min(x + 12, 48), 11, un, uu, GRAPH_UP, size="tiny")
-        _graph(img, d, 1, 18, 62, 18, w_down, GRAPH_DOWN, filled=True)
+        _graph_up_down(img, d, 1, 18, 62, 17, w_down, w_up, GRAPH_DOWN, GRAPH_UP, fill_down=True)
         _txt(img, 2, 38, "Eth", LABEL, size="tiny", role="label")
         dn, du = _split_rate(m.get("lan_down", 0))
         x = _draw_val_unit(img, 18, 38, dn, du, ORANGE, size="tiny")
         _txt(img, min(x + 2, 40), 38, "Up", LABEL, size="tiny", role="label")
         un, uu = _split_rate(m.get("lan_up", 0))
         _draw_val_unit(img, min(x + 12, 48), 38, un, uu, GRAPH_UP, size="tiny")
-        _graph(img, d, 1, 45, 62, 17, eth_down, ORANGE, filled=False)
+        _graph_up_down(img, d, 1, 45, 62, 16, eth_down, eth_up, ORANGE, GRAPH_UP, fill_down=False)
 
     elif sid == "TOP":
         _txt(img, 2, 11, "Down", LABEL, size="tiny", role="label")
