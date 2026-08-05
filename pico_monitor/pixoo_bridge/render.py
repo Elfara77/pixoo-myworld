@@ -1,8 +1,8 @@
 """64×64 RGB screens from pico_monitor /metrics.json (Merlin exporter).
 
 Pixel fonts (no antialias).
-PIXOO_COLOR_MODE: mono = labels/units gray + values solid white;
-  poly = colored labels; values always distinct from labels/units.
+PIXOO_COLOR_MODE: mono = values solid white; labels cyan banner tone (or dim/red);
+  poly = same label rules; values colored per metric.
 Status (LAN/USB/WAN) always green/red. Gauges/pies: green→yellow→orange→red.
 """
 
@@ -170,18 +170,48 @@ def _blink_on() -> bool:
     return (int(time.monotonic() / _BLINK_PERIOD_S) % 2) == 0
 
 
+def _resolve_label_color(color: Sequence[int], *, negligible: bool = False) -> tuple[int, int, int]:
+    """Banner cyan for active labels; dim if negligible; explicit colors (e.g. RED) kept."""
+    if negligible:
+        return DIM
+    if tuple(int(c) for c in color) == LABEL:
+        return HEADER
+    return (int(color[0]), int(color[1]), int(color[2]))
+
+
+def _rate_is_negligible(mbps: float) -> bool:
+    num, unit = _split_rate(float(mbps or 0))
+    return _rate_display_color(float(mbps or 0), num, unit) == DIM
+
+
+def _txt_label(
+    img,
+    x: int,
+    y: int,
+    text: str,
+    *,
+    alert: bool = False,
+    negligible: bool = False,
+    mbps: float | None = None,
+) -> int:
+    neg = negligible if mbps is None else _rate_is_negligible(mbps)
+    return _txt(
+        img, x, y, text, LABEL, size="tiny", role="label", alert=alert, label_negligible=neg
+    )
+
+
 def _ink(color: Sequence[int], *, role: str = "value") -> tuple[int, int, int]:
     """role: label|unit|value|status|alert — values stand out from labels/units."""
-    if role == "status":
+    if role in ("status", "label"):
         return (int(color[0]), int(color[1]), int(color[2]))
     if role == "alert":
         return RED
     if _COLOR_MODE == "mono":
-        if role in ("label", "unit"):
+        if role == "unit":
             return MONO_DIM
         return TEXT_MONO
-    if role in ("label", "unit"):
-        return LABEL if role == "label" else UNIT
+    if role == "unit":
+        return UNIT
     return (int(color[0]), int(color[1]), int(color[2]))
 
 
@@ -195,9 +225,12 @@ def _txt(
     size: str = "normal",
     role: str = "value",
     alert: bool = False,
+    label_negligible: bool = False,
 ) -> int:
     if alert and _ALERT_BLINK and not _blink_on():
         return x
+    if role == "label":
+        color = _resolve_label_color(color, negligible=label_negligible)
     col = _ink(RED if alert else color, role="alert" if alert else role)
     return pf.draw_text(img, x, y, text, col, size=size)
 
@@ -700,7 +733,17 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         if temp_hot:
             _txt(img, 1, y, label, RED, size="tiny", role="status")
         else:
-            _txt(img, 1, y, label, LABEL, size="tiny", role="label", alert=blink_alert)
+            _txt(
+                img,
+                1,
+                y,
+                label,
+                LABEL,
+                size="tiny",
+                role="label",
+                alert=blink_alert,
+                label_negligible=(kind == "temp_cpu" and int(val) == 0),
+            )
         _draw_val_unit(
             img, 16, y, str(int(val)), unit, col, size="tiny", value_role="status", alert=blink_alert
         )
@@ -708,9 +751,18 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         _gauge(d, 36, y + 1, 27, bar_pct, col, alert=blink_alert)
         y += 6
 
-    _txt(img, 1, y, "Dn", LABEL, size="tiny", role="label")
+    _txt(img, 1, y, "Dn", LABEL, size="tiny", role="label", label_negligible=_rate_is_negligible(m.get("wan_down", 0)))
     x = _draw_rate(img, 12, y, m.get("wan_down", 0))
-    _txt(img, min(x + 2, 34), y, "Up", LABEL, size="tiny", role="label")
+    _txt(
+        img,
+        min(x + 2, 34),
+        y,
+        "Up",
+        LABEL,
+        size="tiny",
+        role="label",
+        label_negligible=_rate_is_negligible(m.get("wan_up", 0)),
+    )
     _draw_rate(img, min(x + 12, 44), y, m.get("wan_up", 0))
     y += 6
 
@@ -768,8 +820,9 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
     _header(img, d, SCREEN_TITLES.get(sid, sid), idx)
 
     if sid == "SYS":
-        _txt(img, 2, 11, "Uptime", LABEL, size="tiny", role="label")
-        _txt(img, 26, 11, str(m.get("uptime_str", "--"))[:7], FG, size="tiny", role="value")
+        uptime = str(m.get("uptime_str", "--"))[:7]
+        _txt(img, 2, 11, "Uptime", LABEL, size="tiny", role="label", label_negligible=uptime in ("--", ""))
+        _txt(img, 26, 11, uptime, FG, size="tiny", role="value")
         online = bool(m.get("wan_online"))
         if online or not _ALERT_BLINK or _blink_on():
             d.ellipse([56, 11, 61, 16], fill=GREEN if online else RED)
@@ -780,9 +833,9 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         _gauge_row(img, d, 28, "RAM", ram, kind="load")
         _gauge_row(img, d, 36, "TMP", avg, kind="temp_cpu")
         # Down / Up with distinct value colors
-        _txt(img, 2, 46, "Down", LABEL, size="tiny", role="label")
+        _txt_label(img, 2, 46, "Down", mbps=m.get("wan_down", 0))
         _draw_rate(img, 22, 46, m.get("wan_down", 0))
-        _txt(img, 2, 54, "Up", LABEL, size="tiny", role="label")
+        _txt_label(img, 2, 54, "Up", mbps=m.get("wan_up", 0))
         _draw_rate(img, 22, 54, m.get("wan_up", 0))
 
     elif sid == "LOD":
@@ -832,6 +885,7 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
                 RED if hot else LABEL,
                 size="tiny",
                 role="status" if hot else "label",
+                label_negligible=(not hot and val <= 0),
             )
             _draw_val_unit(
                 img,
@@ -849,15 +903,15 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         down = list(m.get("wan_history_down") or [])
         up = list(m.get("wan_history_up") or [])
         if _WLC_GRAPH_MODE == "split":
-            _txt(img, 2, 11, "Dn", LABEL, size="tiny", role="label")
+            _txt_label(img, 2, 11, "Dn", mbps=m.get("wan_down", 0))
             _draw_rate(img, 14, 11, m.get("wan_down", 0))
-            _txt(img, 34, 11, "Up", LABEL, size="tiny", role="label")
+            _txt_label(img, 34, 11, "Up", mbps=m.get("wan_up", 0))
             _draw_rate(img, 44, 11, m.get("wan_up", 0))
             _wlc_graph_panel(img, d, 1, 18, 62, 44, down, up, GRAPH_DOWN, GRAPH_UP, fill_down=True)
         else:
-            _txt(img, 2, 11, "Dn", LABEL, size="tiny", role="label")
+            _txt_label(img, 2, 11, "Dn", mbps=m.get("wan_down", 0))
             x = _draw_rate(img, 14, 11, m.get("wan_down", 0))
-            _txt(img, min(x + 2, 34), 11, "Up", LABEL, size="tiny", role="label")
+            _txt_label(img, min(x + 2, 34), 11, "Up", mbps=m.get("wan_up", 0))
             _draw_rate(img, min(x + 12, 44), 11, m.get("wan_up", 0))
             _wlc_graph_panel(img, d, 1, 18, 62, 44, down, up, GRAPH_DOWN, GRAPH_UP, fill_down=True)
 
@@ -868,18 +922,18 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         eth_up = list(m.get("lan_history_up") or [])
         _txt(img, 2, 11, "WiFi", LABEL, size="tiny", role="label")
         x = _draw_rate(img, 20, 11, m.get("wifi_down", 0))
-        _txt(img, min(x + 2, 40), 11, "Up", LABEL, size="tiny", role="label")
+        _txt_label(img, min(x + 2, 40), 11, "Up", mbps=m.get("wifi_up", 0))
         _draw_rate(img, min(x + 12, 48), 11, m.get("wifi_up", 0))
         _wlc_graph_panel(img, d, 1, 18, 62, 17, w_down, w_up, GRAPH_DOWN, GRAPH_UP, fill_down=True)
         _txt(img, 2, 38, "Eth", LABEL, size="tiny", role="label")
         x = _draw_rate(img, 18, 38, m.get("lan_down", 0))
-        _txt(img, min(x + 2, 40), 38, "Up", LABEL, size="tiny", role="label")
+        _txt_label(img, min(x + 2, 40), 38, "Up", mbps=m.get("lan_up", 0))
         _draw_rate(img, min(x + 12, 48), 38, m.get("lan_up", 0))
         _wlc_graph_panel(img, d, 1, 45, 62, 16, eth_down, eth_up, ORANGE, GRAPH_UP, fill_down=False)
 
     elif sid == "TOP":
-        _txt(img, 2, 11, "Down", LABEL, size="tiny", role="label")
         downs = _pick_top(m.get("top_down"), limit=2)
+        _txt(img, 2, 11, "Down", LABEL, size="tiny", role="label", label_negligible=not downs)
         if not downs:
             _txt(img, 2, 18, "(none)", DIM, size="tiny", role="label")
         else:
@@ -888,8 +942,8 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
                 _txt(img, 2, row_y, _scroll(name, 8), FG, size="tiny", role="value")
                 _draw_rate(img, 42, row_y, rate)
         d.line([(2, 33), (61, 33)], fill=DIM)
-        _txt(img, 2, 35, "Up", LABEL, size="tiny", role="label")
         ups = _pick_top(m.get("top_up"), limit=2)
+        _txt(img, 2, 35, "Up", LABEL, size="tiny", role="label", label_negligible=not ups)
         if not ups:
             _txt(img, 2, 44, "(none)", DIM, size="tiny", role="label")
         else:
@@ -910,9 +964,9 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         _draw_client_count(img, 24, 22, wifi)
         _txt(img, 34, 22, "Eth", FG, size="tiny", role="status")
         _draw_client_count(img, 48, 22, wired)
-        _txt(img, 2, 29, LABEL_BAND_24, FG, size="tiny", role="status")
+        _txt(img, 2, 29, LABEL_BAND_24, LABEL, size="tiny", role="label", label_negligible=(n2 <= 0))
         _txt(img, 22, 29, str(n2), CYAN, size="tiny", role="status")
-        _txt(img, 34, 29, LABEL_BAND_5, FG, size="tiny", role="status")
+        _txt(img, 34, 29, LABEL_BAND_5, LABEL, size="tiny", role="label", label_negligible=(n5 <= 0))
         _txt(img, 50, 29, str(n5), ORANGE, size="tiny", role="status")
         d.line([(2, 38), (61, 38)], fill=DIM)
         y = 40
