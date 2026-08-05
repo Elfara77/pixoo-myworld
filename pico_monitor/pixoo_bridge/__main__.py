@@ -30,7 +30,13 @@ if str(_HERE.parent) not in sys.path:
     sys.path.insert(0, str(_HERE.parent))
 
 from pixoo_bridge.client import PixooClient
-from pixoo_bridge.render import SCREEN_IDS, _demo_metrics, render_boot_banner, render_screen
+from pixoo_bridge.render import (
+    SCREEN_IDS,
+    _demo_metrics,
+    render_boot_banner,
+    render_screen,
+    set_render_options,
+)
 
 LOG = logging.getLogger("pixoo_bridge")
 
@@ -107,21 +113,37 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--once", action="store_true", help="Push boot banner once and exit")
     ap.add_argument("--preview", type=Path, default=None, help="Also save PNG frames here")
     ap.add_argument(
+        "--color-mode",
+        default=env.get("PIXOO_COLOR_MODE", "mono"),
+        choices=("mono", "poly"),
+        help="mono = sharp B/W text (default); poly = full color palette",
+    )
+    ap.add_argument(
+        "--text-scroll",
+        default=env.get("PIXOO_TEXT_SCROLL", "1"),
+        help="1/0 — scroll titles and long labels that exceed the 64px width",
+    )
+    ap.add_argument(
         "--log",
         default=env.get("PIXOO_LOG") or None,
         help="Also write log file (e.g. /jffs/addons/pico_monitor/logs/pixoo_bridge.log)",
     )
     args = ap.parse_args(argv)
 
+    scroll_on = str(args.text_scroll).strip().lower() in ("1", "true", "yes", "on")
+    set_render_options(color_mode=args.color_mode, text_scroll=scroll_on)
+
     _setup_logging(args.log)
     LOG.info(
-        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s frame_s=%s",
+        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s frame_s=%s color=%s scroll=%s",
         args.pixoo,
         args.metrics,
         args.demo,
         args.brightness,
         args.screen_seconds,
         args.frame_interval,
+        args.color_mode,
+        scroll_on,
     )
 
     client = PixooClient(args.pixoo)
