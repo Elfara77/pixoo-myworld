@@ -48,7 +48,7 @@ cd pico_monitor
 | `PIXOO_BRIGHTNESS` / `--brightness` | `50` | Luminosité Pixoo 0–100 |
 | `PIXOO_SCREENS` / `--screens` | `all` | `all` = défauts **sans SUM**. Optionnel : `SUM` (résumé santé, sans bannière), seul ou mélangé (`all,SUM` / `SUM,SYS,…`). Pastille position si >1 écran (sauf SUM qui n’a pas de bannière). |
 
-Ordre logique défaut : System → Load → Temps → Traffic → WiFi/LAN → Top → Clients → Ports → Disk → Services. **SUM** = écran résumé HP% (CPU/RAM/TMP/DSK + trafic + clients + ports), non inclus dans `all`.
+Ordre logique défaut : System → Load → Temps → Traffic → WiFi/LAN → Top → Clients → Ports → Disk → Services. **SUM** = résumé sans bannière : **Sys%** (CPU/RAM/TMP/DSK) + **Net%** (down/up/clients), puis métriques détaillées ; non inclus dans `all`.
 
 ## Probe
 

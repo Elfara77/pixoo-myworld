@@ -669,42 +669,66 @@ def _health_color(score: float) -> tuple[int, int, int]:
     return RED
 
 
-def _health_score(m: dict[str, Any]) -> int:
-    """Composite router health 0–100 from CPU, RAM, temps, disk, WAN."""
+def _system_health_score(m: dict[str, Any]) -> int:
+    """0–100 from CPU, RAM, temperature, disk (no WAN)."""
     cpu = float(m.get("cpu", 0) or 0)
     ram = float(m.get("ram", 0) or 0)
     t_cpu = float(m.get("temp_cpu", 0) or 0)
     t_avg = float(m.get("temp_avg", 0) or _temp_avg(m))
     disk = _disk_used_pct(m)
-    online = bool(m.get("wan_online"))
 
     cpu_s = max(0.0, 100.0 - cpu)
     ram_s = max(0.0, 100.0 - ram)
     temp_s = min(_temp_score(t_cpu, kind="temp_cpu"), _temp_score(t_avg, kind="temp"))
     disk_s = max(0.0, 100.0 - disk)
-    wan_s = 100.0 if online else 0.0
 
-    score = (
-        0.25 * cpu_s
-        + 0.20 * ram_s
-        + 0.30 * temp_s
-        + 0.15 * disk_s
-        + 0.10 * wan_s
-    )
+    score = 0.30 * cpu_s + 0.25 * ram_s + 0.25 * temp_s + 0.20 * disk_s
     return int(round(max(0.0, min(100.0, score))))
 
 
+def _network_health_score(m: dict[str, Any]) -> int:
+    """0–100 from WAN up, download/upload activity, client count."""
+    if not bool(m.get("wan_online")):
+        return 0
+    wan_down = float(m.get("wan_down", 0) or 0)
+    wan_up = float(m.get("wan_up", 0) or 0)
+    clients = int(m.get("clients", 0) or 0)
+
+    down_s = 100.0 if not _rate_is_negligible(wan_down) else 85.0
+    up_s = 100.0 if not _rate_is_negligible(wan_up) else 85.0
+    cli_s = min(100.0, max(70.0, 70.0 + min(clients, 12) * 2.5))
+
+    score = (down_s + up_s + cli_s) / 3.0
+    return int(round(max(0.0, min(100.0, score))))
+
+
+def _health_score(m: dict[str, Any]) -> int:
+    """Legacy composite (average of system + network health)."""
+    return int(round((_system_health_score(m) + _network_health_score(m)) / 2.0))
+
+
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """Full-bleed summary (no title banner): health + key live metrics."""
-    hp = _health_score(m)
-    hp_col = _health_color(hp)
-    alert_hp = hp < 40
-    _txt(img, 1, 1, "HP", LABEL, size="tiny", role="label", alert=alert_hp)
-    _draw_val_unit(img, 12, 0, str(hp), "%", hp_col, size="normal", value_role="status", alert=alert_hp)
+    """Full-bleed summary (no title banner): system + network health % and live metrics."""
+    sys_hp = _system_health_score(m)
+    net_hp = _network_health_score(m)
+    sys_col = _health_color(sys_hp)
+    net_col = _health_color(net_hp)
+    alert_sys = sys_hp < 40
+    alert_net = net_hp < 40
+
+    _txt(img, 1, 1, "Sys", LABEL, size="tiny", role="label", alert=alert_sys)
+    _draw_val_unit(
+        img, 16, 0, str(sys_hp), "%", sys_col, size="tiny", value_role="status", alert=alert_sys
+    )
+    _txt(img, 32, 1, "Net", LABEL, size="tiny", role="label", alert=alert_net)
+    _draw_val_unit(
+        img, 47, 0, str(net_hp), "%", net_col, size="tiny", value_role="status", alert=alert_net
+    )
     online = bool(m.get("wan_online"))
     if online or not _ALERT_BLINK or _blink_on():
         d.ellipse([57, 1, 62, 6], fill=GREEN if online else RED)
-    _gauge(d, 1, 9, 62, hp, hp_col, alert=alert_hp)
+    _gauge(d, 1, 9, 30, sys_hp, sys_col, alert=alert_sys)
+    _gauge(d, 33, 9, 30, net_hp, net_col, alert=alert_net)
 
     cpu = float(m.get("cpu", 0) or 0)
     ram = float(m.get("ram", 0) or 0)
