@@ -68,6 +68,8 @@ CRIT_DISK = 90.0
 WARN_DISK = 70.0
 
 _RATE_STYLE = "short"
+# WLC WiFi/Eth graphs: overlay = down+up same panel; split = down left, up right.
+_WLC_GRAPH_MODE = "overlay"
 
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
 HEAVY_SCREEN_IDS = frozenset({"LOD", "GRP", "WLC", "TOP", "CLI", "TMP", "SUM"})
@@ -121,9 +123,10 @@ def set_render_options(
     screens: str | None = None,
     heavy_screen_dwell: bool | None = None,
     heavy_screen_multiplier: float | None = None,
+    wlc_graph_mode: str | None = None,
 ) -> None:
     global _COLOR_MODE, _TEXT_SCROLL, _ALERT_BLINK, _BLINK_PERIOD_S, _RATE_STYLE
-    global _HEAVY_DWELL, _HEAVY_DWELL_MULT
+    global _HEAVY_DWELL, _HEAVY_DWELL_MULT, _WLC_GRAPH_MODE
     if color_mode is not None:
         mode = color_mode.strip().lower()
         if mode in ("mono", "monochrome", "bw"):
@@ -147,6 +150,12 @@ def set_render_options(
         _HEAVY_DWELL = bool(heavy_screen_dwell)
     if heavy_screen_multiplier is not None:
         _HEAVY_DWELL_MULT = max(1.0, float(heavy_screen_multiplier))
+    if wlc_graph_mode is not None:
+        m = str(wlc_graph_mode).strip().lower()
+        if m in ("split", "lr", "left-right", "left", "side", "dual"):
+            _WLC_GRAPH_MODE = "split"
+        else:
+            _WLC_GRAPH_MODE = "overlay"
 
 
 def _blink_on() -> bool:
@@ -452,6 +461,31 @@ def _graph_up_down(
         draw.line(d_pts, fill=col_down, width=1)
     if len(u_pts) >= 2:
         draw.line(u_pts, fill=col_up, width=1)
+
+
+def _wlc_graph_panel(
+    img,
+    draw,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    down,
+    up,
+    col_down,
+    col_up,
+    *,
+    fill_down: bool = True,
+) -> None:
+    """WiFi/Eth traffic mini-graphs (overlay or split per PIXOO_WLC_GRAPH_MODE)."""
+    if _WLC_GRAPH_MODE == "split":
+        gap = 1
+        lw = max(8, (w - gap) // 2)
+        rw = max(8, w - lw - gap)
+        _graph(img, draw, x, y, lw, h, list(down or []), col_down, filled=fill_down)
+        _graph(img, draw, x + lw + gap, y, rw, h, list(up or []), col_up, filled=False)
+        return
+    _graph_up_down(img, draw, x, y, w, h, down, up, col_down, col_up, fill_down=fill_down)
 
 
 def _demo_metrics() -> dict[str, Any]:
@@ -791,14 +825,14 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         _txt(img, min(x + 2, 40), 11, "Up", LABEL, size="tiny", role="label")
         un, uu = _split_rate(m.get("wifi_up", 0))
         _draw_val_unit(img, min(x + 12, 48), 11, un, uu, GRAPH_UP, size="tiny")
-        _graph_up_down(img, d, 1, 18, 62, 17, w_down, w_up, GRAPH_DOWN, GRAPH_UP, fill_down=True)
+        _wlc_graph_panel(img, d, 1, 18, 62, 17, w_down, w_up, GRAPH_DOWN, GRAPH_UP, fill_down=True)
         _txt(img, 2, 38, "Eth", LABEL, size="tiny", role="label")
         dn, du = _split_rate(m.get("lan_down", 0))
         x = _draw_val_unit(img, 18, 38, dn, du, ORANGE, size="tiny")
         _txt(img, min(x + 2, 40), 38, "Up", LABEL, size="tiny", role="label")
         un, uu = _split_rate(m.get("lan_up", 0))
         _draw_val_unit(img, min(x + 12, 48), 38, un, uu, GRAPH_UP, size="tiny")
-        _graph_up_down(img, d, 1, 45, 62, 16, eth_down, eth_up, ORANGE, GRAPH_UP, fill_down=False)
+        _wlc_graph_panel(img, d, 1, 45, 62, 16, eth_down, eth_up, ORANGE, GRAPH_UP, fill_down=False)
 
     elif sid == "TOP":
         _txt(img, 2, 11, "Down", LABEL, size="tiny", role="label")

@@ -116,6 +116,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Dwell multiplier for heavy screens (default 2)",
     )
     ap.add_argument(
+        "--wlc-graph-mode",
+        default=env.get("PIXOO_WLC_GRAPH_MODE", "overlay"),
+        choices=("overlay", "split"),
+        help="WLC screen: overlay=down+up same graph; split=down left, up right",
+    )
+    ap.add_argument(
         "--frame-interval",
         type=float,
         default=float(env.get("PIXOO_FRAME_INTERVAL", "1.05")),
@@ -176,12 +182,13 @@ def main(argv: list[str] | None = None) -> int:
         screens=args.screens,
         heavy_screen_dwell=heavy_dwell,
         heavy_screen_multiplier=args.heavy_screen_multiplier,
+        wlc_graph_mode=args.wlc_graph_mode,
     )
     screens = get_screen_ids()
 
     _setup_logging(args.log)
     LOG.info(
-        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s heavy_dwell=%s heavy_x=%s frame_s=%s color=%s scroll=%s blink=%s rate=%s screens=%s",
+        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s heavy_dwell=%s heavy_x=%s wlc_graph=%s frame_s=%s color=%s scroll=%s blink=%s rate=%s screens=%s",
         args.pixoo,
         args.metrics,
         args.demo,
@@ -189,6 +196,7 @@ def main(argv: list[str] | None = None) -> int:
         args.screen_seconds,
         heavy_dwell,
         args.heavy_screen_multiplier,
+        args.wlc_graph_mode,
         args.frame_interval,
         args.color_mode,
         scroll_on,

@@ -160,6 +160,7 @@ start_bridge() {
   ALERT_BLINK="${PIXOO_ALERT_BLINK:-1}"
   BLINK_PERIOD="${PIXOO_BLINK_PERIOD:-0.55}"
   RATE_STYLE="${PIXOO_RATE_STYLE:-short}"
+  WLC_GRAPH="${PIXOO_WLC_GRAPH_MODE:-overlay}"
   SCREENS="${PIXOO_SCREENS:-all}"
 
   export PYTHONPATH="${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
@@ -176,6 +177,7 @@ start_bridge() {
     --alert-blink "${ALERT_BLINK}" \
     --blink-period "${BLINK_PERIOD}" \
     --rate-style "${RATE_STYLE}" \
+    --wlc-graph-mode "${WLC_GRAPH}" \
     --screens "${SCREENS}" \
     >> "${BRIDGE_LOG}" 2>&1 &
   echo $! > "${BRIDGE_PIDFILE}"
