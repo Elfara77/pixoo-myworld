@@ -378,10 +378,13 @@ def _header(img, draw: ImageDraw.ImageDraw, title: str, idx: int) -> None:
     if n > 1:
         label = str(idx + 1)
         tw = pf.text_width_tiny(label)
-        badge_w = tw + 4
-        bx0 = 63 - badge_w + 1
-        draw.rectangle([bx0, 1, 63, 8], fill=HEADER_FG, outline=HEADER)
-        pf.draw_tiny(img, bx0 + 2, 2, label, HEADER)
+        # Full-height black strip on the right (not a tight box around the digit).
+        badge_w = max(10, tw + 6)
+        bx0 = 64 - badge_w
+        draw.rectangle([bx0, 0, 63, 9], fill=HEADER_FG)
+        draw.line([(bx0, 0), (bx0, 9)], fill=HEADER)
+        text_x = bx0 + max(1, (badge_w - tw) // 2)
+        pf.draw_tiny(img, text_x, 2, label, HEADER)
     title_chars = max(3, (63 - badge_w) // 6)
     shown = _scroll(title, title_chars)
     pf.draw_text(img, 1, 1, shown, HEADER_FG, size="normal")
