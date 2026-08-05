@@ -264,45 +264,25 @@ def _disk_tile_color(used_pct: float) -> tuple[int, int, int]:
     return GREEN
 
 
-def _level_color(pct: float, *, kind: str = "load") -> tuple[int, int, int]:
-    """green=ok, yellow=warn, orange=elevated, red=risky."""
+def _diagram_color(pct: float, *, kind: str = "load") -> tuple[int, int, int]:
+    """Gauges, pies, bars: green / yellow / red from current value (matches fill color)."""
     p = float(pct or 0)
-    if kind == "temp_tile":
-        return _temp_tile_color(p)
-    if kind == "disk_tile":
+    if kind in ("disk", "disk_tile"):
         return _disk_tile_color(p)
-    if kind == "temp_cpu":
-        if p >= CRIT_TEMP_CPU:
-            return RED
-        if p >= WARN_TEMP_CPU:
-            return ORANGE
-        if p >= 55:
-            return YELLOW
-        return GREEN
-    if kind == "temp":
-        if p >= CRIT_TEMP_RADIO:
-            return RED
-        if p >= WARN_TEMP_RADIO:
-            return ORANGE
-        if p >= 45:
-            return YELLOW
-        return GREEN
-    if kind == "disk":
-        if p >= CRIT_DISK:
-            return RED
-        if p >= WARN_DISK:
-            return ORANGE
-        if p >= 50:
-            return YELLOW
-        return GREEN
-    # load
+    if kind in ("temp", "temp_cpu", "temp_tile"):
+        return _temp_tile_color(p)
     if p >= CRIT_LOAD:
         return RED
     if p >= WARN_LOAD:
-        return ORANGE
-    if p >= 50:
         return YELLOW
     return GREEN
+
+
+def _level_color(pct: float, *, kind: str = "load") -> tuple[int, int, int]:
+    """Alias for gauges/graphs; diagram metrics use green/yellow/red only."""
+    if kind in ("load", "disk", "disk_tile", "temp", "temp_cpu", "temp_tile"):
+        return _diagram_color(pct, kind=kind)
+    return _diagram_color(pct, kind="load")
 
 
 def _is_crit_load(pct: float) -> bool:
@@ -394,7 +374,7 @@ def _gauge(draw, x: int, y: int, w: int, pct: float, color, *, alert: bool = Fal
 
 def _gauge_row(img, draw, y: int, label: str, pct: float, *, kind: str = "load") -> None:
     alert = _is_crit_load(pct) if kind == "load" else _is_crit_disk(pct)
-    col = _level_color(pct, kind=kind if kind != "load" else "load")
+    col = _diagram_color(pct, kind=kind if kind != "load" else "load")
     _txt(img, 2, y, label[:4], LABEL, size="tiny", role="label", alert=alert)
     _gauge(draw, 20, y, 42, pct, col, alert=alert)
 
@@ -597,12 +577,10 @@ def _temp_score(temp: float, *, kind: str = "temp_cpu") -> float:
 
 def _health_color(score: float) -> tuple[int, int, int]:
     s = float(score or 0)
-    if s >= 80:
+    if s >= 70:
         return GREEN
-    if s >= 60:
-        return YELLOW
     if s >= 40:
-        return ORANGE
+        return YELLOW
     return RED
 
 
@@ -637,7 +615,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     hp_col = _health_color(hp)
     alert_hp = hp < 40
     _txt(img, 1, 1, "HP", LABEL, size="tiny", role="label", alert=alert_hp)
-    _draw_val_unit(img, 12, 0, str(hp), "%", hp_col, size="normal", alert=alert_hp)
+    _draw_val_unit(img, 12, 0, str(hp), "%", hp_col, size="normal", value_role="status", alert=alert_hp)
     online = bool(m.get("wan_online"))
     if online or not _ALERT_BLINK or _blink_on():
         d.ellipse([57, 1, 62, 6], fill=GREEN if online else RED)
@@ -655,14 +633,18 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         ("TMP", tmp, "temp_cpu", "°C"),
         ("DSK", disk, "disk", "%"),
     ):
-        col = _level_color(val, kind=kind)
+        col = _diagram_color(val, kind=kind)
         alert = (
             _is_crit_load(val)
             if kind == "load"
-            else (_is_crit_disk(val) if kind == "disk" else _is_crit_temp("CPU" if kind == "temp_cpu" else "TMP", int(val)))
+            else (
+                _is_crit_disk_tile(val)
+                if kind == "disk"
+                else _is_crit_temp_tile(int(val))
+            )
         )
         _txt(img, 1, y, label, LABEL, size="tiny", role="label", alert=alert)
-        _draw_val_unit(img, 16, y, str(int(val)), unit, col, size="tiny", alert=alert)
+        _draw_val_unit(img, 16, y, str(int(val)), unit, col, size="tiny", value_role="status", alert=alert)
         bar_pct = val if kind != "temp_cpu" else min(100.0, (val / max(float(CRIT_TEMP_CPU), 1.0)) * 100.0)
         _gauge(d, 36, y + 1, 27, bar_pct, col, alert=alert)
         y += 6
@@ -756,9 +738,10 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         ram_now = int(m.get("ram", 0) or 0)
         _txt(img, 2, 11, "CPU", LABEL, size="tiny", role="label")
         _draw_val_unit(
-            img, 20, 11, str(cpu_now), "%", _level_color(cpu_now), size="tiny", alert=_is_crit_load(cpu_now)
+            img, 20, 11, str(cpu_now), "%", _diagram_color(cpu_now, kind="load"), size="tiny",
+            value_role="status", alert=_is_crit_load(cpu_now),
         )
-        _graph(img, d, 1, 18, 62, 18, cpu_h, _level_color(cpu_now), filled=True)
+        _graph(img, d, 1, 18, 62, 18, cpu_h, _diagram_color(cpu_now, kind="load"), filled=True)
         _txt(img, 2, 38, "RAM", LABEL, size="tiny", role="label")
         _draw_val_unit(
             img,
@@ -766,11 +749,12 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
             38,
             str(ram_now),
             "%",
-            _level_color(ram_now),
+            _diagram_color(ram_now, kind="load"),
             size="tiny",
+            value_role="status",
             alert=_is_crit_load(ram_now),
         )
-        _graph(img, d, 1, 45, 62, 17, ram_h, _level_color(ram_now), filled=False)
+        _graph(img, d, 1, 45, 62, 17, ram_h, _diagram_color(ram_now, kind="load"), filled=False)
 
     elif sid == "TMP":
         # Top: CPU | AVG — Bottom: 2G | 5G
@@ -930,19 +914,20 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         j_used = int(jffs.get("used", 0) or 0)
         u_used = int(usb.get("used", 0) or 0) if usb.get("present") else 0
         c_used = int(cache.get("buffers", 0) or 0)
+        j_col = _diagram_color(j_used, kind="disk")
+        u_col = _diagram_color(u_used, kind="disk")
         _txt(img, 2, 11, "JFFS", LABEL, size="tiny", role="label")
-        _draw_val_unit(img, 22, 11, str(j_used), "%", _disk_tile_color(j_used), size="tiny", value_role="status")
+        _draw_val_unit(img, 22, 11, str(j_used), "%", j_col, size="tiny", value_role="status")
         _txt(img, 36, 11, "USB", LABEL, size="tiny", role="label")
-        _draw_val_unit(img, 52, 11, str(u_used), "%", _disk_tile_color(u_used), size="tiny", value_role="status")
-        j_col = _disk_tile_color(j_used)
-        u_col = _disk_tile_color(u_used)
+        _draw_val_unit(img, 52, 11, str(u_used), "%", u_col, size="tiny", value_role="status")
         show_j = not (_is_crit_disk_tile(j_used) and _ALERT_BLINK and not _blink_on())
         show_u = not (_is_crit_disk_tile(u_used) and _ALERT_BLINK and not _blink_on())
         pie(16, 30, 10, j_used if show_j else 0, j_col)
         pie(48, 30, 10, u_used if show_u else 0, u_col)
         _txt(img, 2, 44, "CACHE", LABEL, size="tiny", role="label")
-        _draw_val_unit(img, 28, 44, str(c_used), "%", _disk_tile_color(c_used), size="tiny", value_role="status")
-        pie(48, 54, 7, c_used, _disk_tile_color(c_used))
+        c_col = _diagram_color(c_used, kind="disk")
+        _draw_val_unit(img, 28, 44, str(c_used), "%", c_col, size="tiny", value_role="status")
+        pie(48, 54, 7, c_used, c_col)
 
     elif sid == "SRV":
         y = 11
@@ -969,7 +954,7 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         u2_used = float(usb2.get("used", 0) or usb.get("used", 0) or 0)
         _txt(img, 2, y, "USB2", GREEN if u2_on else RED, size="tiny", role="status")
         if u2_on:
-            _gauge(d, 24, y, 38, u2_used, _level_color(u2_used, kind="disk"), alert=_is_crit_disk(u2_used))
+            _gauge(d, 24, y, 38, u2_used, _diagram_color(u2_used, kind="disk"), alert=_is_crit_disk(u2_used))
         else:
             _txt(img, 28, y, "off", RED, size="tiny", role="status")
         y += 9
@@ -977,7 +962,7 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         u3_used = float(usb3.get("used", 0) or 0)
         _txt(img, 2, y, "USB3", GREEN if u3_on else RED, size="tiny", role="status")
         if u3_on:
-            _gauge(d, 24, y, 38, u3_used, _level_color(u3_used, kind="disk"), alert=_is_crit_disk(u3_used))
+            _gauge(d, 24, y, 38, u3_used, _diagram_color(u3_used, kind="disk"), alert=_is_crit_disk(u3_used))
         else:
             _txt(img, 28, y, "off", RED, size="tiny", role="status")
 
