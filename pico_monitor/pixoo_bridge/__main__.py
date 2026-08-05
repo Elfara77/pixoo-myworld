@@ -143,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--screens",
         default=env.get("PIXOO_SCREENS", "all"),
-        help="Active screens: all or comma list SYS,GRP,TOP,TMP,PIE,SRV,NET",
+        help="Active screens: all or SYS,GRP,TOP,TMP,PIE,SRV,NET,CLI,LOD,WLC",
     )
     ap.add_argument(
         "--log",

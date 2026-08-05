@@ -31,7 +31,7 @@ HEADER_FG = (6, 8, 14)
 # Solid text color in mono mode (no gray nuances)
 TEXT_MONO = (255, 255, 255)
 
-ALL_SCREEN_IDS = ("SYS", "GRP", "TOP", "TMP", "PIE", "SRV", "NET", "CLI")
+ALL_SCREEN_IDS = ("SYS", "GRP", "TOP", "TMP", "PIE", "SRV", "NET", "CLI", "LOD", "WLC")
 SCREEN_TITLES = {
     "SYS": "System",
     "GRP": "Traffic",
@@ -41,6 +41,8 @@ SCREEN_TITLES = {
     "SRV": "Services",
     "NET": "Ports",
     "CLI": "Clients",
+    "LOD": "Load",
+    "WLC": "WiFi/LAN",
 }
 
 # Active rotation set (mutable); default = all
@@ -372,6 +374,17 @@ def _demo_metrics() -> dict[str, Any]:
         "wan_up": round(up, 2),
         "wan_history_down": hist_d,
         "wan_history_up": hist_u,
+        "cpu_history": [40 + 30 * abs(math.sin((t - i) / 9)) for i in range(32)],
+        "temp_history": [50 + 10 * abs(math.sin((t - i) / 15)) for i in range(32)],
+        "temp_avg": 52,
+        "wifi_down": round(down * 0.7, 2),
+        "wifi_up": round(up * 0.6, 2),
+        "lan_down": round(down * 0.3, 2),
+        "lan_up": round(up * 0.4, 2),
+        "wifi_history_down": [x * 0.7 for x in hist_d],
+        "wifi_history_up": [x * 0.6 for x in hist_u],
+        "lan_history_down": [x * 0.3 for x in hist_d],
+        "lan_history_up": [x * 0.4 for x in hist_u],
         "top_down": [["phone45", 125.0], ["living-tv", 42.0], ["idle", 0.0]],
         "top_up": [["nas-box", 18.0], ["cam-front", 7.0], ["zero", 0.0]],
         "temp_cpu": int(55 + 15 * abs(math.sin(t / 19))),
@@ -458,6 +471,62 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         _graph(img, d, 1, 17, 62, 21, down, GRAPH_DOWN, filled=True)
         _txt(img, 2, 39, _scroll(u_label, 15), GRAPH_UP, size="tiny")
         _graph(img, d, 1, 45, 62, 18, up, GRAPH_UP, filled=False)
+
+    elif sid == "LOD":
+        # CPU % + Temp avg °C histories
+        cpu_h = list(m.get("cpu_history") or [])
+        tmp_h = list(m.get("temp_history") or [])
+        cpu_now = int(m.get("cpu", 0) or 0)
+        tmp_now = int(m.get("temp_avg", 0) or _temp_avg(m))
+        _txt(
+            img,
+            2,
+            11,
+            f"CPU {cpu_now}%",
+            RED if _is_crit_load(cpu_now) else CYAN,
+            size="tiny",
+            alert=_is_crit_load(cpu_now),
+        )
+        _graph(img, d, 1, 17, 62, 21, cpu_h, CYAN, filled=True)
+        _txt(
+            img,
+            2,
+            39,
+            f"TMP {tmp_now}C",
+            RED if _is_crit_temp("TMP", tmp_now) else ORANGE,
+            size="tiny",
+            alert=_is_crit_temp("TMP", tmp_now),
+        )
+        _graph(img, d, 1, 45, 62, 18, tmp_h, ORANGE, filled=False)
+
+    elif sid == "WLC":
+        # Wi‑Fi vs cable (LAN) download graphs + D/U rates
+        w_down = list(m.get("wifi_history_down") or [])
+        l_down = list(m.get("lan_history_down") or [])
+        _txt(
+            img,
+            2,
+            11,
+            _scroll(
+                f"WiFi D{_rate_short(m.get('wifi_down', 0))} U{_rate_short(m.get('wifi_up', 0))}",
+                15,
+            ),
+            GRAPH_DOWN,
+            size="tiny",
+        )
+        _graph(img, d, 1, 17, 62, 21, w_down, GRAPH_DOWN, filled=True)
+        _txt(
+            img,
+            2,
+            39,
+            _scroll(
+                f"LAN D{_rate_short(m.get('lan_down', 0))} U{_rate_short(m.get('lan_up', 0))}",
+                15,
+            ),
+            GRAPH_UP,
+            size="tiny",
+        )
+        _graph(img, d, 1, 45, 62, 18, l_down, GRAPH_UP, filled=False)
 
     elif sid == "TOP":
         # Full-width stacked Download / Upload for clarity

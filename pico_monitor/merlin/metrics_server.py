@@ -25,6 +25,14 @@ _last = {"ts": 0.0, "payload": {}}
 _prev_net = None  # (ts, rx, tx)
 _hist_down: list[float] = []
 _hist_up: list[float] = []
+_hist_cpu: list[float] = []
+_hist_temp: list[float] = []
+_hist_wifi_down: list[float] = []
+_hist_wifi_up: list[float] = []
+_hist_lan_down: list[float] = []
+_hist_lan_up: list[float] = []
+_prev_wifi = None  # (ts, rx, tx)
+_prev_lan = None
 _prev_sta: dict[str, tuple[float, int, int]] = {}
 
 
@@ -55,6 +63,66 @@ def _iface_bytes(iface: str) -> tuple[int, int] | None:
         return rx, tx
     except (OSError, ValueError):
         return None
+
+
+def _sum_ifaces_bytes(ifaces: list[str]) -> tuple[int, int]:
+    rx = tx = 0
+    seen = False
+    for iface in ifaces:
+        cur = _iface_bytes(iface)
+        if not cur:
+            continue
+        seen = True
+        rx += cur[0]
+        tx += cur[1]
+    return (rx, tx) if seen else (0, 0)
+
+
+def _wifi_lan_ifaces() -> tuple[list[str], list[str]]:
+    """Return (wifi_ifaces, wired_lan_ifaces) for traffic accounting."""
+    wan = _wan_iface()
+    wifi: list[str] = []
+    for iface in (
+        "eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7",
+        "wl0", "wl1", "wl2", "wl0.1", "wl0.2", "wl1.1", "wl1.2", "wl2.1",
+    ):
+        if not Path(f"/sys/class/net/{iface}").is_dir():
+            continue
+        if _wl_band(iface) or iface.startswith("wl"):
+            wifi.append(iface)
+    wifi_set = set(wifi)
+    lan: list[str] = []
+    for iface in ("lan1", "lan2", "lan3", "lan4", "br0"):
+        if iface == wan or iface in wifi_set:
+            continue
+        if Path(f"/sys/class/net/{iface}").is_dir():
+            lan.append(iface)
+    if not lan:
+        for iface in ("eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7"):
+            if iface == wan or iface in wifi_set:
+                continue
+            if Path(f"/sys/class/net/{iface}").is_dir():
+                lan.append(iface)
+    return wifi, lan
+
+
+def _rate_from_prev(
+    prev: tuple[float, int, int] | None,
+    now: float,
+    rx: int,
+    tx: int,
+) -> tuple[float, float, tuple[float, int, int]]:
+    """Return (down_mbps, up_mbps, new_prev). down=rx growth, up=tx growth on LAN side."""
+    new_prev = (now, rx, tx)
+    if not prev:
+        return 0.0, 0.0, new_prev
+    pts, prx, ptx = prev
+    dt = max(0.001, now - pts)
+    # On LAN/wifi ifaces: rx = from clients (upload to WAN view), tx = to clients (download)
+    # Align with STA convention used elsewhere: down = to clients = tx, up = from clients = rx
+    down_mbps = max(0.0, (tx - ptx) * 8 / 1e6 / dt)
+    up_mbps = max(0.0, (rx - prx) * 8 / 1e6 / dt)
+    return down_mbps, up_mbps, new_prev
 
 
 def _cpu_pct() -> float:
@@ -461,6 +529,9 @@ def _lease_name(mac: str) -> str | None:
 
 def collect() -> dict:
     global _prev_net, _hist_down, _hist_up
+    global _hist_cpu, _hist_temp
+    global _hist_wifi_down, _hist_wifi_up, _hist_lan_down, _hist_lan_up
+    global _prev_wifi, _prev_lan
     now = time.time()
     if now - _last["ts"] < SAMPLE_MIN_S and _last["payload"]:
         return _last["payload"]
@@ -483,7 +554,30 @@ def collect() -> dict:
         _prev_net = (now, rx, tx)
 
     ram_pct, buff_pct, cached_pct = _mem()
+    cpu_pct = _cpu_pct()
     t2, t5 = _wl_temps()
+    t_cpu = _temp_cpu()
+    temps = [t for t in (t_cpu, t2, t5) if t and t > 0]
+    temp_avg = sum(temps) / len(temps) if temps else 0.0
+    _hist_cpu.append(cpu_pct)
+    _hist_temp.append(temp_avg)
+    _hist_cpu = _hist_cpu[-HISTORY_LEN:]
+    _hist_temp = _hist_temp[-HISTORY_LEN:]
+
+    wifi_ifaces, lan_ifaces = _wifi_lan_ifaces()
+    wrx, wtx = _sum_ifaces_bytes(wifi_ifaces)
+    lrx, ltx = _sum_ifaces_bytes(lan_ifaces)
+    wifi_down, wifi_up, _prev_wifi = _rate_from_prev(_prev_wifi, now, wrx, wtx)
+    lan_down, lan_up, _prev_lan = _rate_from_prev(_prev_lan, now, lrx, ltx)
+    _hist_wifi_down.append(wifi_down)
+    _hist_wifi_up.append(wifi_up)
+    _hist_lan_down.append(lan_down)
+    _hist_lan_up.append(lan_up)
+    _hist_wifi_down = _hist_wifi_down[-HISTORY_LEN:]
+    _hist_wifi_up = _hist_wifi_up[-HISTORY_LEN:]
+    _hist_lan_down = _hist_lan_down[-HISTORY_LEN:]
+    _hist_lan_up = _hist_lan_up[-HISTORY_LEN:]
+
     cdetail = _clients_detail()
     total, wifi = int(cdetail["total"]), int(cdetail["wifi"])
     jffs_pct, jffs_ok = _df_pct("/jffs")
@@ -498,7 +592,7 @@ def collect() -> dict:
     dur_s = max(1, len(_hist_down) * SAMPLE_MIN_S)
     payload = {
         "uptime_str": _uptime_str(),
-        "cpu": int(round(_cpu_pct())),
+        "cpu": int(round(cpu_pct)),
         "ram": int(round(ram_pct)),
         "clients": total,
         "clients_wifi": wifi,
@@ -516,10 +610,21 @@ def collect() -> dict:
         "wan_history_max_down": max(_hist_down) if _hist_down else 1.0,
         "wan_history_max_up": max(_hist_up) if _hist_up else 1.0,
         "wan_history_duration": f"{int(dur_s)//60}m{int(dur_s)%60:02d}s",
+        "cpu_history": list(_hist_cpu),
+        "temp_history": list(_hist_temp),
+        "temp_avg": int(round(temp_avg)),
+        "wifi_down": round(wifi_down, 2),
+        "wifi_up": round(wifi_up, 2),
+        "lan_down": round(lan_down, 2),
+        "lan_up": round(lan_up, 2),
+        "wifi_history_down": list(_hist_wifi_down),
+        "wifi_history_up": list(_hist_wifi_up),
+        "lan_history_down": list(_hist_lan_down),
+        "lan_history_up": list(_hist_lan_up),
         "top_down": top_d,
         "top_up": top_u,
         "hw_accel": _nvram("ctf_disable") not in ("1",),
-        "temp_cpu": int(round(_temp_cpu())),
+        "temp_cpu": int(round(t_cpu)),
         "temp_2g": int(round(t2)),
         "temp_5g": int(round(t5)),
         "temp_bands": _last.get("wl_temp_map", ""),
