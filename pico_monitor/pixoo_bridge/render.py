@@ -54,14 +54,18 @@ CRIT_TEMP_RADIO = 65
 CRIT_DISK = 90.0
 
 
+_RATE_STYLE = "short"  # short=K/M/G · long=Kb/s|Mb/s|Gb/s
+
+
 def set_render_options(
     *,
     color_mode: str | None = None,
     text_scroll: bool | None = None,
     alert_blink: bool | None = None,
     blink_period_s: float | None = None,
+    rate_style: str | None = None,
 ) -> None:
-    global _COLOR_MODE, _TEXT_SCROLL, _ALERT_BLINK, _BLINK_PERIOD_S
+    global _COLOR_MODE, _TEXT_SCROLL, _ALERT_BLINK, _BLINK_PERIOD_S, _RATE_STYLE
     if color_mode is not None:
         mode = color_mode.strip().lower()
         if mode in ("mono", "monochrome", "bw"):
@@ -76,6 +80,9 @@ def set_render_options(
         _ALERT_BLINK = bool(alert_blink)
     if blink_period_s is not None:
         _BLINK_PERIOD_S = max(0.2, float(blink_period_s))
+    if rate_style is not None:
+        rs = rate_style.strip().lower()
+        _RATE_STYLE = "long" if rs in ("long", "full", "verbose") else "short"
 
 
 def _text_color(color: Sequence[int]) -> tuple[int, int, int]:
@@ -128,18 +135,31 @@ def _txt(
 
 
 def _rate(mbps: float) -> str:
+    """Format Mbps — long units when PIXOO_RATE_STYLE=long."""
     v = float(mbps or 0)
-    if v >= 1000:
-        return f"{v / 1000:.1f} Gb/s"
-    if v >= 100:
-        return f"{v:.0f} Mb/s"
-    if v >= 1:
-        return f"{v:.1f} Mb/s"
-    return f"{v * 1000:.0f} Kb/s"
+    if _RATE_STYLE == "long":
+        if v >= 1000:
+            return f"{v / 1000:.1f} Gb/s"
+        if v >= 100:
+            return f"{v:.0f} Mb/s"
+        if v >= 1:
+            return f"{v:.1f} Mb/s"
+        return f"{v * 1000:.0f} Kb/s"
+    return _rate_short(v)
 
 
 def _rate_short(mbps: float) -> str:
+    """Compact rate (K/M/G) — used on tight layouts unless long style forced."""
     v = float(mbps or 0)
+    if _RATE_STYLE == "long":
+        # Still compact-ish but with unit suffix truncated for 64px
+        if v >= 1000:
+            return f"{v / 1000:.1f}G"
+        if v >= 100:
+            return f"{v:.0f}M"
+        if v >= 1:
+            return f"{v:.1f}M"
+        return f"{v * 1000:.0f}K"
     if v >= 1000:
         return f"{v / 1000:.1f}G"
     if v >= 100:

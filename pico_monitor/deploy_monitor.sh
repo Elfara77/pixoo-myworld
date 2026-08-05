@@ -50,6 +50,7 @@ PIXOO_COLOR_MODE="${PIXOO_COLOR_MODE:-mono}"
 PIXOO_TEXT_SCROLL="${PIXOO_TEXT_SCROLL:-1}"
 PIXOO_ALERT_BLINK="${PIXOO_ALERT_BLINK:-1}"
 PIXOO_BLINK_PERIOD="${PIXOO_BLINK_PERIOD:-0.55}"
+PIXOO_RATE_STYLE="${PIXOO_RATE_STYLE:-short}"
 
 REMOTE_PATH_ENV='export PATH=/opt/bin:/opt/sbin:/opt/usr/bin:/bin:/sbin:/usr/bin:/usr/sbin'
 
@@ -111,6 +112,7 @@ load_config() {
       PIXOO_TEXT_SCROLL="${PIXOO_TEXT_SCROLL:-1}"
       PIXOO_ALERT_BLINK="${PIXOO_ALERT_BLINK:-1}"
       PIXOO_BLINK_PERIOD="${PIXOO_BLINK_PERIOD:-0.55}"
+      PIXOO_RATE_STYLE="${PIXOO_RATE_STYLE:-short}"
       break
     fi
   done
@@ -136,6 +138,7 @@ PIXOO_COLOR_MODE=${PIXOO_COLOR_MODE}
 PIXOO_TEXT_SCROLL=${PIXOO_TEXT_SCROLL}
 PIXOO_ALERT_BLINK=${PIXOO_ALERT_BLINK}
 PIXOO_BLINK_PERIOD=${PIXOO_BLINK_PERIOD}
+PIXOO_RATE_STYLE=${PIXOO_RATE_STYLE}
 EOF
   cp -f "${CFG_PROJECT}" "${CFG_HOME}"
   echo "Saved ${CFG_PROJECT} and ${CFG_HOME}"
@@ -401,6 +404,146 @@ configure_router() {
   echo "Pixoo bridge will push to ${PIXOO_IP}; metrics on ${ROUTER_HOST}:${METRICS_PORT}"
 }
 
+# Default visual profile (recommended)
+visual_defaults() {
+  PIXOO_COLOR_MODE="mono"
+  PIXOO_TEXT_SCROLL="1"
+  PIXOO_ALERT_BLINK="1"
+  PIXOO_BLINK_PERIOD="0.55"
+  PIXOO_BRIGHTNESS="50"
+  PIXOO_SCREEN_SECONDS="8"
+  PIXOO_FRAME_INTERVAL="1.05"
+  PIXOO_RATE_STYLE="short"
+}
+
+print_visual_profile() {
+  cat <<EOF
+  ┌─ Profil visuel Pixoo ─────────────────────
+  │  Couleur texte   : ${PIXOO_COLOR_MODE}   (mono|poly)
+  │  Scroll titres   : ${PIXOO_TEXT_SCROLL}      (1=on 0=off)
+  │  Alert blink     : ${PIXOO_ALERT_BLINK}      (1=on 0=off)
+  │  Période blink   : ${PIXOO_BLINK_PERIOD}s
+  │  Luminosité      : ${PIXOO_BRIGHTNESS}     (0–100)
+  │  Durée / écran   : ${PIXOO_SCREEN_SECONDS}s
+  │  Rafraîchissement: ${PIXOO_FRAME_INTERVAL}s  (push HTTP)
+  │  Unités débit    : ${PIXOO_RATE_STYLE}  (short=K/M/G · long=Kb/s)
+  └───────────────────────────────────────────
+EOF
+}
+
+_ask_choice() {
+  # $1=prompt $2=default $3=allowed regex (optional)
+  local prompt="$1" def="$2" re="${3:-}"
+  local v
+  read -r -p "${prompt} [${def}]: " v
+  v="${v:-$def}"
+  if [[ -n "${re}" ]] && ! [[ "${v}" =~ ${re} ]]; then
+    echo "  (valeur invalide — conservation de ${def})" >&2
+    echo "${def}"
+    return
+  fi
+  echo "${v}"
+}
+
+configure_visual() {
+  echo "╔══════════════════════════════════════════╗"
+  echo "║  Assistant paramétrage visuel Pixoo      ║"
+  echo "╚══════════════════════════════════════════╝"
+  echo ""
+  echo "Profil par défaut recommandé :"
+  # Show defaults without clobbering current until accepted
+  local _cm="${PIXOO_COLOR_MODE}" _ts="${PIXOO_TEXT_SCROLL}" _ab="${PIXOO_ALERT_BLINK}"
+  local _bp="${PIXOO_BLINK_PERIOD}" _br="${PIXOO_BRIGHTNESS}" _ss="${PIXOO_SCREEN_SECONDS}"
+  local _fi="${PIXOO_FRAME_INTERVAL}" _rs="${PIXOO_RATE_STYLE}"
+  visual_defaults
+  print_visual_profile
+  # restore current while asking
+  PIXOO_COLOR_MODE="${_cm}"
+  PIXOO_TEXT_SCROLL="${_ts}"
+  PIXOO_ALERT_BLINK="${_ab}"
+  PIXOO_BLINK_PERIOD="${_bp}"
+  PIXOO_BRIGHTNESS="${_br}"
+  PIXOO_SCREEN_SECONDS="${_ss}"
+  PIXOO_FRAME_INTERVAL="${_fi}"
+  PIXOO_RATE_STYLE="${_rs}"
+
+  echo ""
+  echo "Profil actuel :"
+  print_visual_profile
+  echo ""
+  local ans
+  read -r -p "Valider le profil par défaut ? [Y/n/c=personnaliser]: " ans
+  ans="${ans:-Y}"
+  case "${ans}" in
+    Y|y|yes|YES|o|O|oui|OUI)
+      visual_defaults
+      echo "→ profil par défaut appliqué."
+      ;;
+    n|N|no|NO|non|NON)
+      echo "→ conservation des valeurs actuelles."
+      ;;
+    c|C|*)
+      echo ""
+      echo "Personnalisation (Entrée = garder) :"
+      PIXOO_COLOR_MODE="$(_ask_choice "Couleur texte mono|poly" "${PIXOO_COLOR_MODE}" '^(mono|poly)$')"
+      PIXOO_TEXT_SCROLL="$(_ask_choice "Scroll titres 1|0" "${PIXOO_TEXT_SCROLL}" '^[01]$')"
+      PIXOO_ALERT_BLINK="$(_ask_choice "Alert blink 1|0" "${PIXOO_ALERT_BLINK}" '^[01]$')"
+      PIXOO_BLINK_PERIOD="$(_ask_choice "Période blink (s)" "${PIXOO_BLINK_PERIOD}" '^[0-9]+([.][0-9]+)?$')"
+      PIXOO_BRIGHTNESS="$(_ask_choice "Luminosité 0–100" "${PIXOO_BRIGHTNESS}" '^[0-9]+$')"
+      if (( PIXOO_BRIGHTNESS > 100 )); then PIXOO_BRIGHTNESS=100; fi
+      PIXOO_SCREEN_SECONDS="$(_ask_choice "Secondes par écran" "${PIXOO_SCREEN_SECONDS}" '^[0-9]+([.][0-9]+)?$')"
+      PIXOO_FRAME_INTERVAL="$(_ask_choice "Intervalle refresh (s)" "${PIXOO_FRAME_INTERVAL}" '^[0-9]+([.][0-9]+)?$')"
+      PIXOO_RATE_STYLE="$(_ask_choice "Unités débit short|long" "${PIXOO_RATE_STYLE}" '^(short|long)$')"
+      echo ""
+      echo "Nouveau profil :"
+      print_visual_profile
+      ;;
+  esac
+
+  save_config
+  apply_visual_remote || true
+}
+
+apply_visual_remote() {
+  # Push visual keys to Merlin config.env and reload bridge if installed
+  if ! remote "echo OK" 2>/dev/null | grep -q OK; then
+    echo "SSH Merlin indisponible — config locale sauvée ; relancer install/start plus tard."
+    return 1
+  fi
+  if ! remote "test -f '${REMOTE_PATH}/config.env'" 2>/dev/null; then
+    echo "Pas encore de config.env distant — sera pris à la prochaine install."
+    return 0
+  fi
+  echo "==> appliquer le profil visuel sur Merlin…"
+  remote "
+    CFG='${REMOTE_PATH}/config.env'
+    _set() {
+      k=\"\$1\"; v=\"\$2\"
+      if grep -q \"^\${k}=\" \"\${CFG}\" 2>/dev/null; then
+        sed -i \"s|^\${k}=.*|\${k}=\${v}|\" \"\${CFG}\"
+      else
+        echo \"\${k}=\${v}\" >> \"\${CFG}\"
+      fi
+    }
+    _set PIXOO_IP '${PIXOO_IP}'
+    _set PIXOO_BRIGHTNESS '${PIXOO_BRIGHTNESS}'
+    _set PIXOO_SCREEN_SECONDS '${PIXOO_SCREEN_SECONDS}'
+    _set PIXOO_FRAME_INTERVAL '${PIXOO_FRAME_INTERVAL}'
+    _set PIXOO_COLOR_MODE '${PIXOO_COLOR_MODE}'
+    _set PIXOO_TEXT_SCROLL '${PIXOO_TEXT_SCROLL}'
+    _set PIXOO_ALERT_BLINK '${PIXOO_ALERT_BLINK}'
+    _set PIXOO_BLINK_PERIOD '${PIXOO_BLINK_PERIOD}'
+    _set PIXOO_RATE_STYLE '${PIXOO_RATE_STYLE}'
+    echo 'config.env updated'
+  "
+  if remote "test -x '${REMOTE_PATH}/watchdog.sh'" 2>/dev/null; then
+    remote "'${REMOTE_PATH}/watchdog.sh' reload" || remote "'${REMOTE_PATH}/watchdog.sh' start" || true
+    echo "Bridge rechargé avec le nouveau profil."
+  else
+    echo "Watchdog absent — profil sauvé ; démarrer après install."
+  fi
+}
+
 upload() {
   echo "==> upload → $(TARGET):${REMOTE_PATH}"
   [[ -d "${BRIDGE_SRC}" ]] || { echo "error: missing ${BRIDGE_SRC}" >&2; return 1; }
@@ -452,7 +595,7 @@ upload() {
 
 install_remote() {
   echo "==> remote install (opkg python3+pillow + cru + metrics + Pixoo bridge)"
-  remote "PICO_METRICS_PORT=${METRICS_PORT} PIXOO_IP=${PIXOO_IP} PIXOO_BRIGHTNESS=${PIXOO_BRIGHTNESS} PIXOO_SCREEN_SECONDS=${PIXOO_SCREEN_SECONDS} PIXOO_FRAME_INTERVAL=${PIXOO_FRAME_INTERVAL} PIXOO_COLOR_MODE=${PIXOO_COLOR_MODE} PIXOO_TEXT_SCROLL=${PIXOO_TEXT_SCROLL} PIXOO_ALERT_BLINK=${PIXOO_ALERT_BLINK} PIXOO_BLINK_PERIOD=${PIXOO_BLINK_PERIOD} /bin/sh '${REMOTE_PATH}/install.sh'"
+  remote "PICO_METRICS_PORT=${METRICS_PORT} PIXOO_IP=${PIXOO_IP} PIXOO_BRIGHTNESS=${PIXOO_BRIGHTNESS} PIXOO_SCREEN_SECONDS=${PIXOO_SCREEN_SECONDS} PIXOO_FRAME_INTERVAL=${PIXOO_FRAME_INTERVAL} PIXOO_COLOR_MODE=${PIXOO_COLOR_MODE} PIXOO_TEXT_SCROLL=${PIXOO_TEXT_SCROLL} PIXOO_ALERT_BLINK=${PIXOO_ALERT_BLINK} PIXOO_BLINK_PERIOD=${PIXOO_BLINK_PERIOD} PIXOO_RATE_STYLE=${PIXOO_RATE_STYLE} /bin/sh '${REMOTE_PATH}/install.sh'"
   echo "Install OK — metrics: http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json"
   echo "           — Pixoo bridge → ${PIXOO_IP} (daemon on Merlin)"
 }
@@ -874,6 +1017,9 @@ auto_mode() {
     echo "  bridge=${ST_BRIDGE} metrics_http=${ST_METRICS} pixoo_api=${ST_PIXOO}"
   fi
   echo "Logs on router: ${REMOTE_PATH}/logs/pixoo_bridge.log"
+  echo ""
+  echo "==> Assistant paramétrage visuel"
+  configure_visual
 }
 
 # --- interactive menu (arrow keys + ENTER; number fallback) ------------------
@@ -891,6 +1037,7 @@ MENU_ITEMS=(
   "Mode automatique (Merlin + Pixoo)|auto_mode"
   "Prerequisites / SSH + Pixoo API|check_prereq"
   "Configure hosts (Merlin + Pixoo)|configure_router"
+  "Assistant paramétrage visuel|configure_visual"
   "Upload merlin + pixoo_bridge|upload"
   "Install (opkg + cru + start)|do_install"
   "Pilotage distant|pilotage_menu"
@@ -1073,6 +1220,7 @@ run_menu_action() {
     auto_mode) auto_mode ;;
     check_prereq) check_prereq || true ;;
     configure_router) configure_router ;;
+    configure_visual) configure_visual ;;
     upload) upload ;;
     do_install) do_install ;;
     flash_pico) flash_pico || true ;;
@@ -1244,10 +1392,11 @@ menu() {
 
 usage() {
   cat <<EOF
-Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash|pilot|start|stop|cron-on|cron-off|logs]
+Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash|pilot|start|stop|cron-on|cron-off|logs|visual]
 
   (no args) / menu   Interactive menu (↑/↓ + ENTER, or numbers)
-  auto               Full pipeline: uninstall→clean→upload→install→start bridge
+  auto               Full pipeline + assistant paramétrage visuel
+  visual             Assistant paramétrage visuel (mono/poly, blink, refresh…)
   install            Upload + install + start (metrics + Pixoo bridge on Merlin)
   uninstall          Remove Merlin addon + cru
   status             Live Merlin + Pixoo status
@@ -1274,6 +1423,7 @@ Env / .deploy.env:
   PIXOO_TEXT_SCROLL  1|0 scroll long titles/labels (default 1)
   PIXOO_ALERT_BLINK  1|0 blink critical text/gauges (default 1)
   PIXOO_BLINK_PERIOD half-cycle seconds for blink (default 0.55)
+  PIXOO_RATE_STYLE   short|long (K/M/G vs Kb/s)
 
 Pixoo display: auto install starts pixoo_bridge ON Merlin (Entware).
 Logs: ${REMOTE_PATH:-/jffs/addons/pico_monitor}/logs/pixoo_bridge.log
@@ -1287,6 +1437,7 @@ case "${CMD}" in
   -h|--help|help) usage ;;
   menu) menu ;;
   auto|automatic|auto_mode) auto_mode ;;
+  visual|visuel|configure_visual|configure-visual) configure_visual ;;
   install) check_prereq; upload; install_remote ;;
   uninstall) uninstall_remote ;;
   status) status_remote ;;

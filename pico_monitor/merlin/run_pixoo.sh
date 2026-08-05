@@ -53,5 +53,6 @@ exec "${PYTHON}" -m pixoo_bridge \
   --text-scroll "${PIXOO_TEXT_SCROLL:-1}" \
   --alert-blink "${PIXOO_ALERT_BLINK:-1}" \
   --blink-period "${PIXOO_BLINK_PERIOD:-0.55}" \
+  --rate-style "${PIXOO_RATE_STYLE:-short}" \
   --log "${LOG}" \
   "$@"

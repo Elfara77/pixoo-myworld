@@ -39,6 +39,9 @@ cd pico_monitor
 | `PIXOO_TEXT_SCROLL` / `--text-scroll` | `1` | Scroll titles/labels longer than the 64px width |
 | `PIXOO_ALERT_BLINK` / `--alert-blink` | `1` | Blink critical text/gauge fills (CPU/RAM≥90, temps, disk≥90, WAN off) |
 | `PIXOO_BLINK_PERIOD` / `--blink-period` | `0.55` | Half-cycle seconds (~1 Hz full blink with default frame interval) |
+| `PIXOO_RATE_STYLE` / `--rate-style` | `short` | `short`=K/M/G · `long`=Kb/s\|Mb/s\|Gb/s |
+
+Assistant interactif : `./deploy_monitor.sh visual` (aussi après `auto`, et entrée menu).
 
 Screens (7): System, Traffic, Top, Temps, Disk Space, Services, Ports. Pixel fonts 5×7 (no antialias).
 
