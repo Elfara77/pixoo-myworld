@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Lightweight HTTP /metrics.json for Pico OLED — runs on Asuswrt-Merlin + Entware.
 
-Aligned with asus_merlin/pixoo_merlin metrics semantics (kbps→Mbps, Wi‑Fi temps,
+Metrics semantics for Pico OLED (kbps→Mbps, Wi‑Fi temps,
 jffs/usb df, top clients best-effort). Avoids hammering wl every request.
 """
 

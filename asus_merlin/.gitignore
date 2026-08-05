@@ -1,7 +1,0 @@
-__pycache__/
-*.pyc
-previews/
-logs/
-run/
-config.env
-.DS_Store

@@ -91,6 +91,6 @@ open previews/01_sys.png
 | 5 | PIE | JFFS / USB / RAM cache |
 | 6 | SRV | VPN + jauges disque |
 
-## Lien avec `asus_merlin/`
+## Exporteur Merlin
 
-Sémantique proche de `pixoo_merlin/metrics.py`. Rate-limit via `PICO_SAMPLE_MIN_S`.
+Les métriques sont exposées par `merlin/metrics_server.py` (kbps→Mbps, temps Wi‑Fi, etc.). Rate-limit via `PICO_SAMPLE_MIN_S`.
