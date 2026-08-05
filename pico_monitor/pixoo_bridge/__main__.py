@@ -124,6 +124,17 @@ def main(argv: list[str] | None = None) -> int:
         help="1/0 — scroll titles and long labels that exceed the 64px width",
     )
     ap.add_argument(
+        "--alert-blink",
+        default=env.get("PIXOO_ALERT_BLINK", "1"),
+        help="1/0 — blink critical text/gauges (CPU/RAM≥90, temps, disk≥90, WAN off)",
+    )
+    ap.add_argument(
+        "--blink-period",
+        type=float,
+        default=float(env.get("PIXOO_BLINK_PERIOD", "0.55")),
+        help="Half-cycle seconds for alert blink (default 0.55 ≈ 1 Hz full cycle)",
+    )
+    ap.add_argument(
         "--log",
         default=env.get("PIXOO_LOG") or None,
         help="Also write log file (e.g. /jffs/addons/pico_monitor/logs/pixoo_bridge.log)",
@@ -131,11 +142,17 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     scroll_on = str(args.text_scroll).strip().lower() in ("1", "true", "yes", "on")
-    set_render_options(color_mode=args.color_mode, text_scroll=scroll_on)
+    blink_on = str(args.alert_blink).strip().lower() in ("1", "true", "yes", "on")
+    set_render_options(
+        color_mode=args.color_mode,
+        text_scroll=scroll_on,
+        alert_blink=blink_on,
+        blink_period_s=args.blink_period,
+    )
 
     _setup_logging(args.log)
     LOG.info(
-        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s frame_s=%s color=%s scroll=%s",
+        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s frame_s=%s color=%s scroll=%s blink=%s",
         args.pixoo,
         args.metrics,
         args.demo,
@@ -144,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
         args.frame_interval,
         args.color_mode,
         scroll_on,
+        blink_on,
     )
 
     client = PixooClient(args.pixoo)

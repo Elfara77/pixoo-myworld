@@ -157,6 +157,8 @@ start_bridge() {
   FRAME_S="${PIXOO_FRAME_INTERVAL:-1.05}"
   COLOR_MODE="${PIXOO_COLOR_MODE:-mono}"
   TEXT_SCROLL="${PIXOO_TEXT_SCROLL:-1}"
+  ALERT_BLINK="${PIXOO_ALERT_BLINK:-1}"
+  BLINK_PERIOD="${PIXOO_BLINK_PERIOD:-0.55}"
 
   export PYTHONPATH="${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
   # Logging goes to stdout/stderr → BRIDGE_LOG via nohup (no --log FileHandler
@@ -169,9 +171,11 @@ start_bridge() {
     --frame-interval "${FRAME_S}" \
     --color-mode "${COLOR_MODE}" \
     --text-scroll "${TEXT_SCROLL}" \
+    --alert-blink "${ALERT_BLINK}" \
+    --blink-period "${BLINK_PERIOD}" \
     >> "${BRIDGE_LOG}" 2>&1 &
   echo $! > "${BRIDGE_PIDFILE}"
-  log_bridge "started bridge pid=$(cat "${BRIDGE_PIDFILE}") pixoo=${PIXOO_IP} metrics=${METRICS_URL} color=${COLOR_MODE}"
+  log_bridge "started bridge pid=$(cat "${BRIDGE_PIDFILE}") pixoo=${PIXOO_IP} metrics=${METRICS_URL} color=${COLOR_MODE} blink=${ALERT_BLINK}"
   ln -sf "${BRIDGE_LOG}" "${BRIDGE_LOG_TMP}" 2>/dev/null || \
     cp -f "${BRIDGE_LOG}" "${BRIDGE_LOG_TMP}" 2>/dev/null || true
   echo "bridge started pid=$(cat "${BRIDGE_PIDFILE}") → Pixoo ${PIXOO_IP}"

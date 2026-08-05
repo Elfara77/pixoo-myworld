@@ -51,5 +51,7 @@ exec "${PYTHON}" -m pixoo_bridge \
   --frame-interval "${PIXOO_FRAME_INTERVAL:-1.05}" \
   --color-mode "${PIXOO_COLOR_MODE:-mono}" \
   --text-scroll "${PIXOO_TEXT_SCROLL:-1}" \
+  --alert-blink "${PIXOO_ALERT_BLINK:-1}" \
+  --blink-period "${PIXOO_BLINK_PERIOD:-0.55}" \
   --log "${LOG}" \
   "$@"

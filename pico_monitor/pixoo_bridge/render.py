@@ -3,6 +3,7 @@
 Pixel fonts (no antialias). PIXOO_COLOR_MODE only affects *text*:
   mono = all text one solid color (white); poly = per-label solid hues.
 Gauges, graphs, status dots keep full color + thresholds always.
+Critical alerts can blink (PIXOO_ALERT_BLINK) on text and gauge fills.
 """
 
 from __future__ import annotations
@@ -43,10 +44,24 @@ SCREEN_TITLES = {
 
 _COLOR_MODE = "mono"
 _TEXT_SCROLL = True
+_ALERT_BLINK = True
+_BLINK_PERIOD_S = 0.55  # half-cycle; full blink ~1.1s (matches frame interval)
+
+# Critical thresholds
+CRIT_LOAD = 90.0
+CRIT_TEMP_CPU = 85
+CRIT_TEMP_RADIO = 65
+CRIT_DISK = 90.0
 
 
-def set_render_options(*, color_mode: str | None = None, text_scroll: bool | None = None) -> None:
-    global _COLOR_MODE, _TEXT_SCROLL
+def set_render_options(
+    *,
+    color_mode: str | None = None,
+    text_scroll: bool | None = None,
+    alert_blink: bool | None = None,
+    blink_period_s: float | None = None,
+) -> None:
+    global _COLOR_MODE, _TEXT_SCROLL, _ALERT_BLINK, _BLINK_PERIOD_S
     if color_mode is not None:
         mode = color_mode.strip().lower()
         if mode in ("mono", "monochrome", "bw"):
@@ -57,6 +72,10 @@ def set_render_options(*, color_mode: str | None = None, text_scroll: bool | Non
             _COLOR_MODE = "mono"
     if text_scroll is not None:
         _TEXT_SCROLL = bool(text_scroll)
+    if alert_blink is not None:
+        _ALERT_BLINK = bool(alert_blink)
+    if blink_period_s is not None:
+        _BLINK_PERIOD_S = max(0.2, float(blink_period_s))
 
 
 def _text_color(color: Sequence[int]) -> tuple[int, int, int]:
@@ -66,8 +85,46 @@ def _text_color(color: Sequence[int]) -> tuple[int, int, int]:
     return (int(color[0]), int(color[1]), int(color[2]))
 
 
-def _txt(img, x: int, y: int, text: str, color: Sequence[int], *, size: str = "normal") -> int:
-    return pf.draw_text(img, x, y, text, _text_color(color), size=size)
+def _blink_on() -> bool:
+    """True during the visible half of the blink cycle."""
+    if not _ALERT_BLINK:
+        return True
+    import time
+
+    return (int(time.monotonic() / _BLINK_PERIOD_S) % 2) == 0
+
+
+def _is_crit_load(pct: float) -> bool:
+    return float(pct or 0) >= CRIT_LOAD
+
+
+def _is_crit_disk(pct: float) -> bool:
+    return float(pct or 0) >= CRIT_DISK
+
+
+def _is_crit_temp(label: str, val: int) -> bool:
+    if label == "CPU":
+        return val >= CRIT_TEMP_CPU
+    if label in ("2G", "5G", "AVG", "TMP"):
+        return val >= CRIT_TEMP_RADIO
+    return False
+
+
+def _txt(
+    img,
+    x: int,
+    y: int,
+    text: str,
+    color: Sequence[int],
+    *,
+    size: str = "normal",
+    alert: bool = False,
+) -> int:
+    """Draw text; if alert and blink off-phase, skip (blink effect)."""
+    if alert and _ALERT_BLINK and not _blink_on():
+        return x
+    col = RED if alert else color
+    return pf.draw_text(img, x, y, text, _text_color(col) if not alert else RED, size=size)
 
 
 def _rate(mbps: float) -> str:
@@ -154,12 +211,29 @@ def _header(img, draw: ImageDraw.ImageDraw, title: str, idx: int) -> None:
             draw.rectangle([x, 3, x + 2, 6], outline=HEADER_FG)
 
 
-def _gauge(draw: ImageDraw.ImageDraw, x: int, y: int, w: int, pct: float, color) -> None:
+def _gauge(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    w: int,
+    pct: float,
+    color,
+    *,
+    alert: bool = False,
+) -> None:
     pct = max(0.0, min(100.0, float(pct)))
     draw.rectangle([x, y, x + w - 1, y + 5], outline=DIM, fill=BAR_BG)
     fill = int((w - 2) * pct / 100)
-    if fill > 0:
-        draw.rectangle([x + 1, y + 1, x + fill, y + 4], fill=color)
+    if fill <= 0:
+        return
+    # Critical: blink fill between RED and empty track
+    if alert and _ALERT_BLINK:
+        if not _blink_on():
+            return
+        color = RED
+    elif alert:
+        color = RED
+    draw.rectangle([x + 1, y + 1, x + fill, y + 4], fill=color)
 
 
 def _gauge_row(
@@ -171,10 +245,11 @@ def _gauge_row(
     color,
     *,
     label_w: int = 18,
+    alert: bool = False,
 ) -> None:
-    """Label + gauge on the same row."""
-    _txt(img, 2, y, label[:5], DIM, size="tiny")
-    _gauge(draw, 2 + label_w, y, 64 - 4 - label_w, pct, color)
+    """Label + gauge on the same row; optional critical blink."""
+    _txt(img, 2, y, label[:5], DIM if not alert else RED, size="tiny", alert=alert)
+    _gauge(draw, 2 + label_w, y, 64 - 4 - label_w, pct, color, alert=alert)
 
 
 def _graph(
@@ -278,12 +353,24 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
     if sid == "SYS":
         _txt(img, 2, 11, str(m.get("uptime_str", "--"))[:10], FG, size="tiny")
         online = bool(m.get("wan_online"))
-        d.ellipse([56, 12, 61, 17], fill=GREEN if online else RED)
-        # Label + gauge same line
-        _gauge_row(img, d, 20, "CPU", m.get("cpu", 0), _gauge_color(m.get("cpu", 0)))
-        _gauge_row(img, d, 30, "RAM", m.get("ram", 0), _gauge_color(m.get("ram", 0), kind="ram"))
+        if online or not _ALERT_BLINK or _blink_on():
+            d.ellipse([56, 12, 61, 17], fill=GREEN if online else RED)
+        cpu = float(m.get("cpu", 0) or 0)
+        ram = float(m.get("ram", 0) or 0)
         avg = _temp_avg(m)
-        _gauge_row(img, d, 40, "TMP", avg, _gauge_color(avg, kind="temp"))
+        _gauge_row(img, d, 20, "CPU", cpu, _gauge_color(cpu), alert=_is_crit_load(cpu))
+        _gauge_row(
+            img, d, 30, "RAM", ram, _gauge_color(ram, kind="ram"), alert=_is_crit_load(ram)
+        )
+        _gauge_row(
+            img,
+            d,
+            40,
+            "TMP",
+            avg,
+            _gauge_color(avg, kind="temp"),
+            alert=_is_crit_temp("TMP", avg),
+        )
         _txt(img, 2, 52, f"D {_rate_short(m.get('wan_down', 0))}", GRAPH_DOWN, size="tiny")
         _txt(img, 34, 52, f"U {_rate_short(m.get('wan_up', 0))}", GRAPH_UP, size="tiny")
 
@@ -330,10 +417,12 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
             (32, 38, "AVG", avg, ORANGE),
         ]
         for x, y, label, val, color in cells:
-            d.rectangle([x, y, x + 31, y + 24], outline=DIM)
-            _txt(img, x + 3, y + 2, label, DIM, size="tiny")
-            col = RED if _temp_hot(label, val) else color
-            _txt(img, x + 3, y + 11, f"{val}C", col, size="normal")
+            hot = _temp_hot(label, val) or _is_crit_temp(label, val)
+            outline = RED if (hot and (not _ALERT_BLINK or _blink_on())) else DIM
+            d.rectangle([x, y, x + 31, y + 24], outline=outline)
+            _txt(img, x + 3, y + 2, label, DIM, size="tiny", alert=hot)
+            col = RED if hot else color
+            _txt(img, x + 3, y + 11, f"{val}C", col, size="normal", alert=hot)
 
     elif sid == "PIE":
         jffs = m.get("jffs") or {}
@@ -351,10 +440,14 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         j_used = int(jffs.get("used", 0) or 0)
         u_used = int(usb.get("used", 0) or 0) if usb.get("present") else 0
         c_used = int(cache.get("buffers", 0) or 0)
-        _txt(img, 2, 11, f"JFFS {j_used}%", DIM, size="tiny")
-        _txt(img, 34, 11, f"USB {u_used}%", DIM, size="tiny")
-        pie(16, 30, 10, j_used, _gauge_color(j_used))
-        pie(48, 30, 10, u_used, _gauge_color(u_used, kind="ram"))
+        j_alert = _is_crit_disk(j_used)
+        u_alert = _is_crit_disk(u_used)
+        _txt(img, 2, 11, f"JFFS {j_used}%", DIM, size="tiny", alert=j_alert)
+        _txt(img, 34, 11, f"USB {u_used}%", DIM, size="tiny", alert=u_alert)
+        j_col = RED if j_alert else _gauge_color(j_used)
+        u_col = RED if u_alert else _gauge_color(u_used, kind="ram")
+        pie(16, 30, 10, 0 if (j_alert and _ALERT_BLINK and not _blink_on()) else j_used, j_col)
+        pie(48, 30, 10, 0 if (u_alert and _ALERT_BLINK and not _blink_on()) else u_used, u_col)
         _txt(img, 2, 44, f"CACHE {c_used}%", DIM, size="tiny")
         pie(40, 54, 7, c_used, CYAN)
 
@@ -378,19 +471,24 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         if not usb2 and not usb3 and usb:
             usb2 = {"present": bool(usb.get("present")), "used": usb.get("used", 0)}
 
-        _gauge_row(img, d, y, "JFFS", jffs.get("used", 0), _gauge_color(jffs.get("used", 0)))
+        j_used = float(jffs.get("used", 0) or 0)
+        _gauge_row(
+            img, d, y, "JFFS", j_used, _gauge_color(j_used), alert=_is_crit_disk(j_used)
+        )
         y += 10
         u2_on = bool(usb2.get("present"))
+        u2_used = float(usb2.get("used", 0) or usb.get("used", 0) or 0)
         _txt(img, 2, y, "USB2", GREEN if u2_on else RED, size="tiny")
         if u2_on:
-            _gauge(d, 22, y, 40, usb2.get("used", 0) or usb.get("used", 0), ORANGE)
+            _gauge(d, 22, y, 40, u2_used, ORANGE, alert=_is_crit_disk(u2_used))
         else:
             _txt(img, 28, y, "off", DIM, size="tiny")
         y += 10
         u3_on = bool(usb3.get("present"))
+        u3_used = float(usb3.get("used", 0) or 0)
         _txt(img, 2, y, "USB3", GREEN if u3_on else RED, size="tiny")
         if u3_on:
-            _gauge(d, 22, y, 40, usb3.get("used", 0), ORANGE)
+            _gauge(d, 22, y, 40, u3_used, ORANGE, alert=_is_crit_disk(u3_used))
         else:
             _txt(img, 28, y, "off", DIM, size="tiny")
 
@@ -415,12 +513,13 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         _txt(img, 2, 40, "USB2", GREEN if u2 else RED, size="normal")
         _txt(img, 34, 40, "USB3", GREEN if u3 else RED, size="normal")
         online = bool(m.get("wan_online"))
-        _txt(img, 2, 54, "WAN", DIM, size="tiny")
-        d.ellipse([22, 54, 28, 60], fill=GREEN if online else RED)
+        _txt(img, 2, 54, "WAN", DIM, size="tiny", alert=not online)
+        if online or not _ALERT_BLINK or _blink_on():
+            d.ellipse([22, 54, 28, 60], fill=GREEN if online else RED)
 
     if m.get("_demo") or m.get("_offline"):
         tag = "DEMO" if m.get("_demo") else "OFF"
-        _txt(img, 40, 57, tag, YELLOW, size="tiny")
+        _txt(img, 40, 57, tag, YELLOW, size="tiny", alert=bool(m.get("_offline")))
 
     return img
 
