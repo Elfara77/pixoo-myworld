@@ -345,6 +345,14 @@ def _draw_val_unit(
     return x
 
 
+def _draw_client_count(img, x: int, y: int, n: int, *, size: str = "tiny") -> int:
+    """Client totals: green if >0, red + optional blink if 0."""
+    n = int(n or 0)
+    if n == 0:
+        return _txt(img, x, y, str(n), RED, size=size, role="status", alert=True)
+    return _txt(img, x, y, str(n), GREEN, size=size, role="status")
+
+
 def _header(img, draw: ImageDraw.ImageDraw, title: str, idx: int) -> None:
     screens = get_screen_ids()
     n = len(screens)
@@ -638,9 +646,9 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     clients = int(m.get("clients", 0) or 0)
     wifi = int(m.get("clients_wifi", 0) or 0)
     _txt(img, 1, y, "Cli", LABEL, size="tiny", role="label")
-    _txt(img, 14, y, str(clients), FG, size="tiny", role="value")
+    _draw_client_count(img, 14, y, clients)
     _txt(img, 28, y, "Wi", LABEL, size="tiny", role="label")
-    _txt(img, 38, y, str(wifi), CYAN, size="tiny", role="value")
+    _draw_client_count(img, 38, y, wifi)
     vpns = _active_vpns(m)
     if vpns:
         _txt(img, 48, y, "V", GREEN, size="tiny", role="status")
@@ -826,11 +834,11 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         n2 = int(m.get("clients_2g", 0) or 0)
         n5 = int(m.get("clients_5g", 0) or 0)
         _txt(img, 2, 11, "All", LABEL, size="tiny", role="label")
-        _txt(img, 18, 11, str(total), FG, size="normal", role="value")
+        _draw_client_count(img, 18, 11, total, size="normal")
         _txt(img, 2, 22, "WiFi", LABEL, size="tiny", role="label")
-        _txt(img, 22, 22, str(wifi), CYAN, size="tiny", role="value")
+        _draw_client_count(img, 22, 22, wifi)
         _txt(img, 34, 22, "Eth", LABEL, size="tiny", role="label")
-        _txt(img, 50, 22, str(wired), ORANGE, size="tiny", role="value")
+        _draw_client_count(img, 50, 22, wired)
         _txt(img, 2, 30, "2G", LABEL, size="tiny", role="label")
         _txt(img, 14, 30, str(n2), (120, 200, 255), size="tiny", role="value")
         _txt(img, 34, 30, "5G", LABEL, size="tiny", role="label")
@@ -857,15 +865,18 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
             x += 10
         wifi = int(m.get("clients_wifi", 0) or 0)
         clients = int(m.get("clients", 0) or 0)
-        _txt(img, 2, 26, "WiFi", LABEL, size="tiny", role="label")
-        _txt(img, 22, 26, str(wifi), CYAN, size="tiny", role="value")
-        _txt(img, 34, 26, "All", LABEL, size="tiny", role="label")
-        _txt(img, 50, 26, str(clients), FG, size="tiny", role="value")
+        wired = int(m.get("clients_wired", 0) or max(0, clients - wifi))
+        _txt(img, 2, 24, "WiFi", LABEL, size="tiny", role="label")
+        _draw_client_count(img, 22, 24, wifi)
+        _txt(img, 34, 24, "Eth", LABEL, size="tiny", role="label")
+        _draw_client_count(img, 44, 24, wired)
+        _txt(img, 2, 33, "All", LABEL, size="tiny", role="label")
+        _draw_client_count(img, 18, 33, clients)
         usb2 = m.get("usb2") or {}
         usb3 = m.get("usb3") or {}
         u2, u3 = bool(usb2.get("present")), bool(usb3.get("present"))
-        _txt(img, 2, 38, "USB2", GREEN if u2 else RED, size="normal", role="status")
-        _txt(img, 34, 38, "USB3", GREEN if u3 else RED, size="normal", role="status")
+        _txt(img, 2, 42, "USB2", GREEN if u2 else RED, size="normal", role="status")
+        _txt(img, 34, 42, "USB3", GREEN if u3 else RED, size="normal", role="status")
         online = bool(m.get("wan_online"))
         _txt(img, 2, 52, "WAN", LABEL, size="tiny", role="label", alert=not online)
         if online or not _ALERT_BLINK or _blink_on():
