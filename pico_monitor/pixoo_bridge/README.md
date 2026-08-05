@@ -35,10 +35,10 @@ cd pico_monitor
 
 | Env / flag | Default | Meaning |
 |------------|---------|---------|
-| `PIXOO_COLOR_MODE` / `--color-mode` | `mono` | `mono` = B/W pixel text; `poly` = color palette |
+| `PIXOO_COLOR_MODE` / `--color-mode` | `mono` | `mono` = all **text** one solid color; `poly` = colored labels. Gauges/graphs stay colored either way. |
 | `PIXOO_TEXT_SCROLL` / `--text-scroll` | `1` | Scroll titles/labels longer than the 64px width |
 
-Screens use 5×7 pixel fonts (no antialias). Titles: System, Traffic, Top, Temps, Disk Space, Services.
+Screens (7): System, Traffic, Top, Temps, Disk Space, Services, Ports. Pixel fonts 5×7 (no antialias).
 
 ## Probe
 

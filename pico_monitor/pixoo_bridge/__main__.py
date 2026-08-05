@@ -116,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         "--color-mode",
         default=env.get("PIXOO_COLOR_MODE", "mono"),
         choices=("mono", "poly"),
-        help="mono = sharp B/W text (default); poly = full color palette",
+        help="mono = all text one solid color; poly = colored labels (gauges stay colored)",
     )
     ap.add_argument(
         "--text-scroll",

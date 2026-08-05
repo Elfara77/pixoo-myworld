@@ -228,23 +228,102 @@ def _usb_pct() -> tuple[int, bool]:
     return 0, False
 
 
+def _usb_ports() -> tuple[dict, dict]:
+    """Detect USB2 / USB3 device presence and best-effort usage %."""
+    u2_on = u3_on = False
+    base = Path("/sys/bus/usb/devices")
+    if base.is_dir():
+        for d in base.iterdir():
+            # Skip root hubs without a real device idProduct sibling pattern:
+            # count nodes that expose a speed + (idVendor or product).
+            speed_p = d / "speed"
+            if not speed_p.is_file():
+                continue
+            if not (d / "idVendor").is_file() and not (d / "product").is_file():
+                continue
+            # Root hubs are like usb1/usb2 — skip pure hubs named usbN
+            if re.fullmatch(r"usb\d+", d.name):
+                continue
+            try:
+                sp = float(speed_p.read_text().strip() or 0)
+            except (OSError, ValueError):
+                continue
+            if sp >= 5000:
+                u3_on = True
+            elif sp >= 12:
+                u2_on = True
+    # Mounted storage usage (shared) — attribute to USB3 if present else USB2
+    used, present = _usb_pct()
+    if present and not (u2_on or u3_on):
+        u2_on = True
+    u2 = {"present": u2_on, "used": used if u2_on and not u3_on else (used if u2_on else 0)}
+    u3 = {"present": u3_on, "used": used if u3_on else 0}
+    return u2, u3
+
+
+def _lan_ports() -> list[bool]:
+    """LAN1..LAN4 link up (True) / down (False)."""
+    states: list[bool] = []
+    # robocfg: "Port 1: ... 1000FD Enabled" / "Down"
+    out = _run("robocfg show 2>/dev/null")
+    if out:
+        for port in range(1, 5):
+            m = re.search(
+                rf"Port\s+{port}\s*:.*?((?:1000|100|10)\s*\w*|Down|Enabled|Disabled)",
+                out,
+                re.I | re.S,
+            )
+            if m:
+                tok = m.group(1).lower()
+                states.append("down" not in tok and "disabled" not in tok)
+            else:
+                # line-oriented fallback
+                line = ""
+                for ln in out.splitlines():
+                    if re.match(rf"Port\s+{port}\b", ln, re.I):
+                        line = ln.lower()
+                        break
+                if line:
+                    states.append("down" not in line and "disabled" not in line)
+                else:
+                    states.append(False)
+        if len(states) == 4:
+            return states
+
+    # sysfs carrier on common LAN ifaces
+    for iface in ("lan1", "lan2", "lan3", "lan4", "eth1", "eth2", "eth3", "eth4"):
+        try:
+            c = Path(f"/sys/class/net/{iface}/carrier").read_text().strip()
+            states.append(c == "1")
+        except OSError:
+            continue
+        if len(states) >= 4:
+            return states[:4]
+    while len(states) < 4:
+        states.append(False)
+    return states[:4]
+
+
 def _vpn() -> tuple[dict, dict]:
     ovpn = _run("pidof vpnclient1 openvpn 2>/dev/null")
     st1 = _nvram("vpn_client1_state")
     on1 = bool(ovpn) or st1 in ("2", "connected", "1")
-    st2 = _nvram("vpn_client2_state")
-    on2 = st2 in ("2", "connected", "1")
-    return {"on": on1, "type": "OVPN"}, {"on": on2, "type": "WG"}
+    st2 = _nvram("vpn_client2_state") or _nvram("wgc1_enable")
+    # WireGuard client often separate
+    wg = _run("pidof wg-quick wireguard 2>/dev/null") or _nvram("wgc1_addr")
+    on2 = st2 in ("2", "connected", "1") or bool(wg and _nvram("wgc1_enable") in ("1", "on"))
+    t2 = "WG" if (wg or "wg" in (_nvram("vpn_client2_desc") or "").lower()) else "VPN2"
+    return {"on": on1, "type": "OVPN"}, {"on": on2, "type": t2}
 
 
 def _top_clients_wifi(now: float) -> tuple[list, list]:
-    """Best-effort top 2 down/up from wl sta_info (capped)."""
+    """Best-effort top down/up from wl sta_info (capped). Rates in Mbps."""
     rates = []
     n = 0
-    for iface in ("eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7"):
+    for iface in ("eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7", "wl0", "wl1", "wl2"):
         assoc = _run(f"wl -i {iface} assoclist 2>/dev/null")
         for mac in re.findall(r"(?i)([0-9a-f:]{17})", assoc):
-            if n >= 8:
+            if n >= 12:
                 break
             n += 1
             out = _run(f"wl -i {iface} sta_info {mac} 2>/dev/null", timeout=2.0)
@@ -267,18 +346,36 @@ def _top_clients_wifi(now: float) -> tuple[list, list]:
             if prev:
                 pts, prx, ptx = prev
                 dt = max(0.001, now - pts)
-                down = max(0.0, (tx - ptx) * 8 / 1000 / dt)  # kbps
-                up = max(0.0, (rx - prx) * 8 / 1000 / dt)
+                # STA tx = download to client; rx = upload from client
+                down_kbps = max(0.0, (tx - ptx) * 8 / 1000 / dt)
+                up_kbps = max(0.0, (rx - prx) * 8 / 1000 / dt)
             else:
-                down = up = 0.0
-            short = "." + mac.replace(":", "")[-2:]
-            rates.append((short, down, up))
-    downs = sorted(rates, key=lambda x: x[1], reverse=True)[:2]
-    ups = sorted(rates, key=lambda x: x[2], reverse=True)[:2]
+                down_kbps = up_kbps = 0.0
+            # Prefer hostname from DHCP lease if available
+            short = _lease_name(mac) or ("." + mac.replace(":", "")[-4:])
+            rates.append((short, down_kbps, up_kbps))
+    downs = sorted(rates, key=lambda x: x[1], reverse=True)[:3]
+    ups = sorted(rates, key=lambda x: x[2], reverse=True)[:3]
     return (
-        [(n, round(d / 1000.0, 1)) for n, d, _u in downs],  # Mbps-ish
-        [(n, round(u / 1000.0, 1)) for n, _d, u in ups],
+        [(n, round(d / 1000.0, 2)) for n, d, _u in downs],
+        [(n, round(u / 1000.0, 2)) for n, _d, u in ups],
     )
+
+
+def _lease_name(mac: str) -> str | None:
+    mac_l = mac.lower()
+    for path in ("/var/lib/misc/dnsmasq.leases", "/tmp/var/lib/misc/dnsmasq.leases"):
+        try:
+            text = Path(path).read_text()
+        except OSError:
+            continue
+        for line in text.splitlines():
+            parts = line.split()
+            if len(parts) >= 4 and parts[1].lower() == mac_l:
+                name = parts[3]
+                if name and name != "*":
+                    return name[:12]
+    return None
 
 
 def collect() -> dict:
@@ -309,6 +406,8 @@ def collect() -> dict:
     total, wifi = _clients()
     jffs_pct, jffs_ok = _df_pct("/jffs")
     usb_pct, usb_ok = _usb_pct()
+    usb2, usb3 = _usb_ports()
+    lan_ports = _lan_ports()
     vpn1, vpn2 = _vpn()
     top_d, top_u = _top_clients_wifi(now)
     wan_state = _nvram("wan0_state_t") or _nvram("wan0_state")
@@ -342,6 +441,9 @@ def collect() -> dict:
         "vpn2": vpn2,
         "jffs": {"used": jffs_pct, "total": 100, "present": jffs_ok},
         "usb": {"used": usb_pct, "total": 100, "present": usb_ok},
+        "usb2": usb2,
+        "usb3": usb3,
+        "lan_ports": lan_ports,
         "ram_cache": {"buffers": buff_pct, "cached": cached_pct},
     }
     _last["ts"] = now
