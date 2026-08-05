@@ -27,8 +27,18 @@ On the router: `python3 -m pixoo_bridge` (via `watchdog.sh`), metrics from
 cd pico_monitor
 ./pixoo_bridge/run.sh --demo
 ./pixoo_bridge/run.sh --once
-./pixoo_bridge/run.sh
+./pixoo_bridge/run.sh --color-mode poly   # full color palette
+./pixoo_bridge/run.sh --color-mode mono   # default: sharp B/W pixel text
 ```
+
+## Render options
+
+| Env / flag | Default | Meaning |
+|------------|---------|---------|
+| `PIXOO_COLOR_MODE` / `--color-mode` | `mono` | `mono` = B/W pixel text; `poly` = color palette |
+| `PIXOO_TEXT_SCROLL` / `--text-scroll` | `1` | Scroll titles/labels longer than the 64px width |
+
+Screens use 5×7 pixel fonts (no antialias). Titles: System, Traffic, Top, Temps, Disk Space, Services.
 
 ## Probe
 

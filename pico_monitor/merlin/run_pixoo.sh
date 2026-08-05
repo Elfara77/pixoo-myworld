@@ -49,5 +49,7 @@ exec "${PYTHON}" -m pixoo_bridge \
   --brightness "${PIXOO_BRIGHTNESS:-50}" \
   --screen-seconds "${PIXOO_SCREEN_SECONDS:-8}" \
   --frame-interval "${PIXOO_FRAME_INTERVAL:-1.05}" \
+  --color-mode "${PIXOO_COLOR_MODE:-mono}" \
+  --text-scroll "${PIXOO_TEXT_SCROLL:-1}" \
   --log "${LOG}" \
   "$@"

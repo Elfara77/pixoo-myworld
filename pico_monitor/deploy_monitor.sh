@@ -46,6 +46,8 @@ METRICS_PORT="${PICO_METRICS_PORT:-8088}"
 PIXOO_BRIGHTNESS="${PIXOO_BRIGHTNESS:-50}"
 PIXOO_SCREEN_SECONDS="${PIXOO_SCREEN_SECONDS:-8}"
 PIXOO_FRAME_INTERVAL="${PIXOO_FRAME_INTERVAL:-1.05}"
+PIXOO_COLOR_MODE="${PIXOO_COLOR_MODE:-mono}"
+PIXOO_TEXT_SCROLL="${PIXOO_TEXT_SCROLL:-1}"
 
 REMOTE_PATH_ENV='export PATH=/opt/bin:/opt/sbin:/opt/usr/bin:/bin:/sbin:/usr/bin:/usr/sbin'
 
@@ -103,6 +105,8 @@ load_config() {
       PIXOO_BRIGHTNESS="${PIXOO_BRIGHTNESS:-50}"
       PIXOO_SCREEN_SECONDS="${PIXOO_SCREEN_SECONDS:-8}"
       PIXOO_FRAME_INTERVAL="${PIXOO_FRAME_INTERVAL:-1.05}"
+      PIXOO_COLOR_MODE="${PIXOO_COLOR_MODE:-mono}"
+      PIXOO_TEXT_SCROLL="${PIXOO_TEXT_SCROLL:-1}"
       break
     fi
   done
@@ -124,6 +128,8 @@ PICO_METRICS_PORT=${METRICS_PORT}
 PIXOO_BRIGHTNESS=${PIXOO_BRIGHTNESS}
 PIXOO_SCREEN_SECONDS=${PIXOO_SCREEN_SECONDS}
 PIXOO_FRAME_INTERVAL=${PIXOO_FRAME_INTERVAL}
+PIXOO_COLOR_MODE=${PIXOO_COLOR_MODE}
+PIXOO_TEXT_SCROLL=${PIXOO_TEXT_SCROLL}
 EOF
   cp -f "${CFG_PROJECT}" "${CFG_HOME}"
   echo "Saved ${CFG_PROJECT} and ${CFG_HOME}"
@@ -440,7 +446,7 @@ upload() {
 
 install_remote() {
   echo "==> remote install (opkg python3+pillow + cru + metrics + Pixoo bridge)"
-  remote "PICO_METRICS_PORT=${METRICS_PORT} PIXOO_IP=${PIXOO_IP} PIXOO_BRIGHTNESS=${PIXOO_BRIGHTNESS} PIXOO_SCREEN_SECONDS=${PIXOO_SCREEN_SECONDS} PIXOO_FRAME_INTERVAL=${PIXOO_FRAME_INTERVAL} /bin/sh '${REMOTE_PATH}/install.sh'"
+  remote "PICO_METRICS_PORT=${METRICS_PORT} PIXOO_IP=${PIXOO_IP} PIXOO_BRIGHTNESS=${PIXOO_BRIGHTNESS} PIXOO_SCREEN_SECONDS=${PIXOO_SCREEN_SECONDS} PIXOO_FRAME_INTERVAL=${PIXOO_FRAME_INTERVAL} PIXOO_COLOR_MODE=${PIXOO_COLOR_MODE} PIXOO_TEXT_SCROLL=${PIXOO_TEXT_SCROLL} /bin/sh '${REMOTE_PATH}/install.sh'"
   echo "Install OK — metrics: http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json"
   echo "           — Pixoo bridge → ${PIXOO_IP} (daemon on Merlin)"
 }
@@ -1258,6 +1264,8 @@ Env / .deploy.env:
   PICO_SSH_AUTH     key|password
   PICO_METRICS_PORT metrics HTTP port (default 8088)
   PIXOO_BRIGHTNESS / PIXOO_SCREEN_SECONDS / PIXOO_FRAME_INTERVAL
+  PIXOO_COLOR_MODE   mono|poly (default mono — sharp pixel text)
+  PIXOO_TEXT_SCROLL  1|0 scroll long titles/labels (default 1)
 
 Pixoo display: auto install starts pixoo_bridge ON Merlin (Entware).
 Logs: ${REMOTE_PATH:-/jffs/addons/pico_monitor}/logs/pixoo_bridge.log

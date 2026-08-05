@@ -37,6 +37,10 @@ cp -n .deploy.env.example .deploy.env   # PIXOO_IP=192.168.52.4
 Après `auto`, le Pixoo doit afficher la bannière puis les 6 écrans.
 Si les métriques sont down, le bridge bascule en **demo** (écran non vide).
 
+Rendu (défaut **mono** = texte pixel net) : `PIXOO_COLOR_MODE=mono|poly`,
+`PIXOO_TEXT_SCROLL=1` pour faire défiler les titres longs. Voir
+`pixoo_bridge/README.md`.
+
 ## Logs (routeur → Mac)
 
 Sur Merlin (persistants jffs) :
