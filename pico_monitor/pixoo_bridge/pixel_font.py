@@ -55,6 +55,7 @@ _TINY: dict[str, tuple[int, ...]] = {
     "t": (0x04, 0x1F, 0x04),
     "u": (0x0F, 0x10, 0x0F),
     "k": (0x1F, 0x04, 0x1B),
+    "°": (0x00, 0x01, 0x00),  # single top-center pixel (see draw_tiny)
 }
 
 # 5×7 glyphs (5 columns)
@@ -140,7 +141,10 @@ def _glyph(table: dict[str, tuple[int, ...]], ch: str) -> tuple[int, ...]:
 
 
 def text_width_tiny(text: str) -> int:
-    return len(text) * 4
+    w = 0
+    for ch in text:
+        w += 2 if ch == "°" else 4
+    return w
 
 
 def text_width_normal(text: str) -> int:
@@ -160,6 +164,11 @@ def draw_tiny(img, x: int, y: int, text: str, color: Sequence[int]) -> int:
     """3×5 text. Returns x after last glyph."""
     cx = x
     for ch in text:
+        if ch == "°":
+            # One bright pixel (superscript dot); narrow advance so °C reads clearly.
+            _put(img, cx + 1, y, color)
+            cx += 2
+            continue
         cols = _glyph(_TINY, ch)
         for dx, col in enumerate(cols):
             for dy in range(5):
