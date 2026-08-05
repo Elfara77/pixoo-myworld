@@ -309,6 +309,34 @@ def _is_crit_temp(label: str, val: int) -> bool:
     return False
 
 
+def _rate_unit_color(unit: str) -> tuple[int, int, int]:
+    """Throughput tier color: K=green, M=red, G=yellow (value + unit match)."""
+    u = unit.strip().upper()
+    if u.startswith("G"):
+        return YELLOW
+    if u.startswith("M"):
+        return RED
+    if u.startswith("K"):
+        return GREEN
+    return FG
+
+
+def _draw_rate(
+    img,
+    x: int,
+    y: int,
+    mbps: float,
+    *,
+    size: str = "tiny",
+    alert: bool = False,
+) -> int:
+    num, unit = _split_rate(mbps)
+    col = _rate_unit_color(unit)
+    return _draw_val_unit(
+        img, x, y, num, unit, col, size=size, value_role="status", alert=alert
+    )
+
+
 def _draw_val_unit(
     img,
     x: int,
@@ -328,7 +356,9 @@ def _draw_val_unit(
         y_off = 0 if size != "big" else 2
         if us == "tiny" and size == "normal":
             y_off = 1
-        x = _txt(img, x + 1, y + y_off, unit, UNIT, size=us, role="unit")
+        u_role = "status" if value_role == "status" else "unit"
+        u_col = val_color if u_role == "status" else UNIT
+        x = _txt(img, x + 1, y + y_off, unit, u_col, size=us, role=u_role)
     return x
 
 
@@ -650,11 +680,9 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         y += 6
 
     _txt(img, 1, y, "Dn", LABEL, size="tiny", role="label")
-    dn, du = _split_rate(m.get("wan_down", 0))
-    x = _draw_val_unit(img, 12, y, dn, du, GRAPH_DOWN, size="tiny")
+    x = _draw_rate(img, 12, y, m.get("wan_down", 0))
     _txt(img, min(x + 2, 34), y, "Up", LABEL, size="tiny", role="label")
-    un, uu = _split_rate(m.get("wan_up", 0))
-    _draw_val_unit(img, min(x + 12, 44), y, un, uu, GRAPH_UP, size="tiny")
+    _draw_rate(img, min(x + 12, 44), y, m.get("wan_up", 0))
     y += 6
 
     clients = int(m.get("clients", 0) or 0)
@@ -689,8 +717,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     if tops:
         name, rate = tops[0]
         _txt(img, 1, y, _scroll(name, 7), FG, size="tiny", role="value")
-        dn, du = _split_rate(rate)
-        _draw_val_unit(img, 38, y, dn, du, GRAPH_DOWN, size="tiny")
+        _draw_rate(img, 38, y, rate)
     else:
         uptime = str(m.get("uptime_str", "--"))[:8]
         _txt(img, 1, y, "up", LABEL, size="tiny", role="label")
@@ -725,11 +752,9 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         _gauge_row(img, d, 36, "TMP", avg, kind="temp_cpu")
         # Down / Up with distinct value colors
         _txt(img, 2, 46, "Down", LABEL, size="tiny", role="label")
-        dn, du = _split_rate(m.get("wan_down", 0))
-        _draw_val_unit(img, 22, 46, dn, du, GRAPH_DOWN, size="tiny")
+        _draw_rate(img, 22, 46, m.get("wan_down", 0))
         _txt(img, 2, 54, "Up", LABEL, size="tiny", role="label")
-        un, uu = _split_rate(m.get("wan_up", 0))
-        _draw_val_unit(img, 22, 54, un, uu, GRAPH_UP, size="tiny")
+        _draw_rate(img, 22, 54, m.get("wan_up", 0))
 
     elif sid == "LOD":
         cpu_h = list(m.get("cpu_history") or [])
@@ -788,12 +813,10 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         down = list(m.get("wan_history_down") or [])
         up = list(m.get("wan_history_up") or [])
         _txt(img, 2, 11, "Down", LABEL, size="tiny", role="label")
-        dn, du = _split_rate(m.get("wan_down", 0))
-        _draw_val_unit(img, 22, 11, dn, du, GRAPH_DOWN, size="tiny")
+        _draw_rate(img, 22, 11, m.get("wan_down", 0))
         _graph(img, d, 1, 18, 62, 18, down, GRAPH_DOWN, filled=True)
         _txt(img, 2, 38, "Up", LABEL, size="tiny", role="label")
-        un, uu = _split_rate(m.get("wan_up", 0))
-        _draw_val_unit(img, 22, 38, un, uu, GRAPH_UP, size="tiny")
+        _draw_rate(img, 22, 38, m.get("wan_up", 0))
         _graph(img, d, 1, 45, 62, 17, up, GRAPH_UP, filled=False)
 
     elif sid == "WLC":
@@ -802,18 +825,14 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         eth_down = list(m.get("lan_history_down") or [])
         eth_up = list(m.get("lan_history_up") or [])
         _txt(img, 2, 11, "WiFi", LABEL, size="tiny", role="label")
-        dn, du = _split_rate(m.get("wifi_down", 0))
-        x = _draw_val_unit(img, 20, 11, dn, du, GRAPH_DOWN, size="tiny")
+        x = _draw_rate(img, 20, 11, m.get("wifi_down", 0))
         _txt(img, min(x + 2, 40), 11, "Up", LABEL, size="tiny", role="label")
-        un, uu = _split_rate(m.get("wifi_up", 0))
-        _draw_val_unit(img, min(x + 12, 48), 11, un, uu, GRAPH_UP, size="tiny")
+        _draw_rate(img, min(x + 12, 48), 11, m.get("wifi_up", 0))
         _wlc_graph_panel(img, d, 1, 18, 62, 17, w_down, w_up, GRAPH_DOWN, GRAPH_UP, fill_down=True)
         _txt(img, 2, 38, "Eth", LABEL, size="tiny", role="label")
-        dn, du = _split_rate(m.get("lan_down", 0))
-        x = _draw_val_unit(img, 18, 38, dn, du, ORANGE, size="tiny")
+        x = _draw_rate(img, 18, 38, m.get("lan_down", 0))
         _txt(img, min(x + 2, 40), 38, "Up", LABEL, size="tiny", role="label")
-        un, uu = _split_rate(m.get("lan_up", 0))
-        _draw_val_unit(img, min(x + 12, 48), 38, un, uu, GRAPH_UP, size="tiny")
+        _draw_rate(img, min(x + 12, 48), 38, m.get("lan_up", 0))
         _wlc_graph_panel(img, d, 1, 45, 62, 16, eth_down, eth_up, ORANGE, GRAPH_UP, fill_down=False)
 
     elif sid == "TOP":
@@ -825,8 +844,7 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
             y += 9
         for name, rate in downs:
             _txt(img, 2, y, _scroll(name, 6), FG, size="normal", role="value")
-            dn, du = _split_rate(rate)
-            _draw_val_unit(img, 40, y + 1, dn, du, GRAPH_DOWN, size="tiny")
+            _draw_rate(img, 40, y + 1, rate)
             y += 9
         y = max(y + 1, 37)
         d.line([(2, y - 1), (61, y - 1)], fill=DIM)
@@ -839,8 +857,7 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
             if y > 55:
                 break
             _txt(img, 2, y, _scroll(name, 6), FG, size="normal", role="value")
-            un, uu = _split_rate(rate)
-            _draw_val_unit(img, 40, y + 1, un, uu, GRAPH_UP, size="tiny")
+            _draw_rate(img, 40, y + 1, rate)
             y += 9
 
     elif sid == "CLI":
