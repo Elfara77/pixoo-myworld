@@ -868,16 +868,16 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         wired = int(m.get("clients_wired", 0) or max(0, total - wifi))
         n2 = int(m.get("clients_2g", 0) or 0)
         n5 = int(m.get("clients_5g", 0) or 0)
-        _txt(img, 2, 11, "All", LABEL, size="tiny", role="label")
-        _draw_client_count(img, 18, 11, total, size="normal")
-        _txt(img, 2, 22, "WiFi", LABEL, size="tiny", role="label")
-        _draw_client_count(img, 22, 22, wifi)
-        _txt(img, 34, 22, "Eth", LABEL, size="tiny", role="label")
-        _draw_client_count(img, 50, 22, wired)
-        _txt(img, 2, 30, "2G", LABEL, size="tiny", role="label")
-        _txt(img, 14, 30, str(n2), (120, 200, 255), size="tiny", role="value")
-        _txt(img, 34, 30, "5G", LABEL, size="tiny", role="label")
-        _txt(img, 46, 30, str(n5), (200, 140, 255), size="tiny", role="value")
+        _txt(img, 2, 11, "All", FG, size="tiny", role="status")
+        _draw_client_count(img, 20, 11, total, size="normal")
+        _txt(img, 2, 22, "WiFi", FG, size="tiny", role="status")
+        _draw_client_count(img, 24, 22, wifi)
+        _txt(img, 34, 22, "Eth", FG, size="tiny", role="status")
+        _draw_client_count(img, 48, 22, wired)
+        _txt(img, 2, 31, "2G", FG, size="tiny", role="status")
+        _txt(img, 14, 30, str(n2), CYAN, size="normal", role="status")
+        _txt(img, 34, 31, "5G", FG, size="tiny", role="status")
+        _txt(img, 46, 30, str(n5), ORANGE, size="normal", role="status")
         d.line([(2, 38), (61, 38)], fill=DIM)
         y = 40
         for row in list(m.get("clients_ssid") or [])[:3]:
@@ -885,8 +885,8 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
                 name, n = str(row.get("ssid", "?")), int(row.get("n", 0))
             except (AttributeError, TypeError, ValueError):
                 continue
-            _txt(img, 2, y, _scroll(name, 9), LABEL, size="tiny", role="label")
-            _txt(img, 52, y, str(n), CYAN, size="normal", role="status")
+            _txt(img, 2, y, _scroll(name, 8), FG, size="tiny", role="status")
+            _txt(img, 50, y, str(n), CYAN, size="normal", role="status")
             y += 8
 
     elif sid == "NET":
