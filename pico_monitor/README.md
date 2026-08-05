@@ -38,7 +38,7 @@ Après `auto`, le Pixoo doit afficher la bannière puis les 6 écrans.
 Si les métriques sont down, le bridge bascule en **demo** (écran non vide).
 
 Rendu : `./deploy_monitor.sh visual` — mono/poly, blink, luminosité, temps/écran,
-unités, sélection d’écrans. 10 écrans dont **Clients**, **Load** (CPU/Temp),
+unités, sélection d’écrans. 10 écrans dont **Clients**, **Load** (CPU/RAM),
 **WiFi/LAN**. Voir `pixoo_bridge/README.md`.
 
 ## Logs (routeur → Mac)

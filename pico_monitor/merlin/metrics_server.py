@@ -26,6 +26,7 @@ _prev_net = None  # (ts, rx, tx)
 _hist_down: list[float] = []
 _hist_up: list[float] = []
 _hist_cpu: list[float] = []
+_hist_ram: list[float] = []
 _hist_temp: list[float] = []
 _hist_wifi_down: list[float] = []
 _hist_wifi_up: list[float] = []
@@ -541,7 +542,7 @@ def _lease_name(mac: str) -> str | None:
 
 def collect() -> dict:
     global _prev_net, _hist_down, _hist_up
-    global _hist_cpu, _hist_temp
+    global _hist_cpu, _hist_ram, _hist_temp
     global _hist_wifi_down, _hist_wifi_up, _hist_lan_down, _hist_lan_up
     global _prev_wifi, _prev_lan, _prev_br
     now = time.time()
@@ -572,8 +573,10 @@ def collect() -> dict:
     temps = [t for t in (t_cpu, t2, t5) if t and t > 0]
     temp_avg = sum(temps) / len(temps) if temps else 0.0
     _hist_cpu.append(cpu_pct)
+    _hist_ram.append(ram_pct)
     _hist_temp.append(temp_avg)
     _hist_cpu = _hist_cpu[-HISTORY_LEN:]
+    _hist_ram = _hist_ram[-HISTORY_LEN:]
     _hist_temp = _hist_temp[-HISTORY_LEN:]
 
     wifi_ifaces, wired_ifaces = _wifi_lan_ifaces()
@@ -622,6 +625,7 @@ def collect() -> dict:
         "wan_history_max_up": max(_hist_up) if _hist_up else 1.0,
         "wan_history_duration": f"{int(dur_s)//60}m{int(dur_s)%60:02d}s",
         "cpu_history": list(_hist_cpu),
+        "ram_history": list(_hist_ram),
         "temp_history": list(_hist_temp),
         "temp_avg": int(round(temp_avg)),
         "wifi_down": round(wifi_down, 2),

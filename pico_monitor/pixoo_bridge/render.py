@@ -427,6 +427,7 @@ def _demo_metrics() -> dict[str, Any]:
         "wan_history_down": hist_d,
         "wan_history_up": hist_u,
         "cpu_history": [40 + 30 * abs(math.sin((t - i) / 9)) for i in range(32)],
+        "ram_history": [50 + 20 * abs(math.sin((t - i) / 11)) for i in range(32)],
         "temp_history": [50 + 10 * abs(math.sin((t - i) / 15)) for i in range(32)],
         "temp_avg": 52,
         "wifi_down": round(down * 0.7, 2),
@@ -666,26 +667,26 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
 
     elif sid == "LOD":
         cpu_h = list(m.get("cpu_history") or [])
-        tmp_h = list(m.get("temp_history") or [])
+        ram_h = list(m.get("ram_history") or [])
         cpu_now = int(m.get("cpu", 0) or 0)
-        tmp_now = int(m.get("temp_avg", 0) or _temp_avg(m))
+        ram_now = int(m.get("ram", 0) or 0)
         _txt(img, 2, 11, "CPU", LABEL, size="tiny", role="label")
         _draw_val_unit(
             img, 20, 11, str(cpu_now), "%", _level_color(cpu_now), size="tiny", alert=_is_crit_load(cpu_now)
         )
         _graph(img, d, 1, 18, 62, 18, cpu_h, _level_color(cpu_now), filled=True)
-        _txt(img, 2, 38, "TMP", LABEL, size="tiny", role="label")
+        _txt(img, 2, 38, "RAM", LABEL, size="tiny", role="label")
         _draw_val_unit(
             img,
             20,
             38,
-            str(tmp_now),
-            "°C",
-            _level_color(tmp_now, kind="temp"),
+            str(ram_now),
+            "%",
+            _level_color(ram_now),
             size="tiny",
-            alert=_is_crit_temp("TMP", tmp_now),
+            alert=_is_crit_load(ram_now),
         )
-        _graph(img, d, 1, 45, 62, 17, tmp_h, _level_color(tmp_now, kind="temp"), filled=False)
+        _graph(img, d, 1, 45, 62, 17, ram_h, _level_color(ram_now), filled=False)
 
     elif sid == "TMP":
         # Top: CPU | AVG — Bottom: 2G | 5G

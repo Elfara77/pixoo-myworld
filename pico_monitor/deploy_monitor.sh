@@ -425,7 +425,7 @@ visual_defaults() {
 ALL_PIXOO_SCREENS=(SYS LOD TMP GRP WLC TOP CLI NET PIE SRV)
 ALL_PIXOO_SCREEN_LABELS=(
   "SYS System"
-  "LOD Load CPU/Temp"
+  "LOD Load CPU/RAM"
   "TMP Temps"
   "GRP Traffic WAN"
   "WLC WiFi/LAN traffic"
