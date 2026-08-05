@@ -154,6 +154,8 @@ start_bridge() {
   METRICS_URL="${PIXOO_METRICS_URL:-http://127.0.0.1:${METRICS_PORT}/metrics.json}"
   BRIGHTNESS="${PIXOO_BRIGHTNESS:-50}"
   SCREEN_S="${PIXOO_SCREEN_SECONDS:-8}"
+  HEAVY_DWELL="${PIXOO_HEAVY_SCREEN_DWELL:-1}"
+  HEAVY_MULT="${PIXOO_HEAVY_SCREEN_MULTIPLIER:-2}"
   FRAME_S="${PIXOO_FRAME_INTERVAL:-1.05}"
   COLOR_MODE="${PIXOO_COLOR_MODE:-mono}"
   TEXT_SCROLL="${PIXOO_TEXT_SCROLL:-1}"
@@ -171,6 +173,8 @@ start_bridge() {
     --metrics "${METRICS_URL}" \
     --brightness "${BRIGHTNESS}" \
     --screen-seconds "${SCREEN_S}" \
+    --heavy-screen-dwell "${HEAVY_DWELL}" \
+    --heavy-screen-multiplier "${HEAVY_MULT}" \
     --frame-interval "${FRAME_S}" \
     --color-mode "${COLOR_MODE}" \
     --text-scroll "${TEXT_SCROLL}" \
@@ -181,7 +185,7 @@ start_bridge() {
     --screens "${SCREENS}" \
     >> "${BRIDGE_LOG}" 2>&1 &
   echo $! > "${BRIDGE_PIDFILE}"
-  log_bridge "started bridge pid=$(cat "${BRIDGE_PIDFILE}") pixoo=${PIXOO_IP} metrics=${METRICS_URL} color=${COLOR_MODE} blink=${ALERT_BLINK} rate=${RATE_STYLE} screens=${SCREENS}"
+  log_bridge "started bridge pid=$(cat "${BRIDGE_PIDFILE}") pixoo=${PIXOO_IP} metrics=${METRICS_URL} color=${COLOR_MODE} blink=${ALERT_BLINK} rate=${RATE_STYLE} heavy=${HEAVY_DWELL}x${HEAVY_MULT} wlc_graph=${WLC_GRAPH} screens=${SCREENS}"
   ln -sf "${BRIDGE_LOG}" "${BRIDGE_LOG_TMP}" 2>/dev/null || \
     cp -f "${BRIDGE_LOG}" "${BRIDGE_LOG_TMP}" 2>/dev/null || true
   echo "bridge started pid=$(cat "${BRIDGE_PIDFILE}") → Pixoo ${PIXOO_IP}"

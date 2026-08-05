@@ -117,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--wlc-graph-mode",
-        default=env.get("PIXOO_WLC_GRAPH_MODE", "overlay"),
+        default=env.get("PIXOO_WLC_GRAPH_MODE") or env.get("PIXOO_GRAPH_MODE", "overlay"),
         choices=("overlay", "split"),
         help="WLC screen: overlay=down+up same graph; split=down left, up right",
     )

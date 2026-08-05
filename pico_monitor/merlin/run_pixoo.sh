@@ -48,6 +48,8 @@ exec "${PYTHON}" -m pixoo_bridge \
   --metrics "${METRICS_URL}" \
   --brightness "${PIXOO_BRIGHTNESS:-50}" \
   --screen-seconds "${PIXOO_SCREEN_SECONDS:-8}" \
+  --heavy-screen-dwell "${PIXOO_HEAVY_SCREEN_DWELL:-1}" \
+  --heavy-screen-multiplier "${PIXOO_HEAVY_SCREEN_MULTIPLIER:-2}" \
   --frame-interval "${PIXOO_FRAME_INTERVAL:-1.05}" \
   --color-mode "${PIXOO_COLOR_MODE:-mono}" \
   --text-scroll "${PIXOO_TEXT_SCROLL:-1}" \

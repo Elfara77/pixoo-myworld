@@ -72,7 +72,7 @@ CRIT_DISK = 90.0
 WARN_DISK = 70.0
 
 _RATE_STYLE = "short"
-# WLC WiFi/Eth graphs: overlay = down+up same panel; split = down left, up right.
+# WLC WiFi/Eth + GRP WAN graphs: overlay = down+up same panel; split = down left, up right.
 _WLC_GRAPH_MODE = "overlay"
 
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
@@ -832,12 +832,18 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
     elif sid == "GRP":
         down = list(m.get("wan_history_down") or [])
         up = list(m.get("wan_history_up") or [])
-        _txt(img, 2, 11, "Down", LABEL, size="tiny", role="label")
-        _draw_rate(img, 22, 11, m.get("wan_down", 0))
-        _graph(img, d, 1, 18, 62, 18, down, GRAPH_DOWN, filled=True)
-        _txt(img, 2, 38, "Up", LABEL, size="tiny", role="label")
-        _draw_rate(img, 22, 38, m.get("wan_up", 0))
-        _graph(img, d, 1, 45, 62, 17, up, GRAPH_UP, filled=False)
+        if _WLC_GRAPH_MODE == "split":
+            _txt(img, 2, 11, "Dn", LABEL, size="tiny", role="label")
+            _draw_rate(img, 14, 11, m.get("wan_down", 0))
+            _txt(img, 34, 11, "Up", LABEL, size="tiny", role="label")
+            _draw_rate(img, 44, 11, m.get("wan_up", 0))
+            _wlc_graph_panel(img, d, 1, 18, 62, 44, down, up, GRAPH_DOWN, GRAPH_UP, fill_down=True)
+        else:
+            _txt(img, 2, 11, "Dn", LABEL, size="tiny", role="label")
+            x = _draw_rate(img, 14, 11, m.get("wan_down", 0))
+            _txt(img, min(x + 2, 34), 11, "Up", LABEL, size="tiny", role="label")
+            _draw_rate(img, min(x + 12, 44), 11, m.get("wan_up", 0))
+            _wlc_graph_panel(img, d, 1, 18, 62, 44, down, up, GRAPH_DOWN, GRAPH_UP, fill_down=True)
 
     elif sid == "WLC":
         w_down = list(m.get("wifi_history_down") or [])
