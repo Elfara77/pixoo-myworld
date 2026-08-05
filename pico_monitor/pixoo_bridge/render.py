@@ -32,6 +32,10 @@ HEADER_FG = (6, 8, 14)
 TEXT_MONO = (255, 255, 255)
 MONO_DIM = (130, 130, 130)
 
+# Wi‑Fi band labels (tiny font width on 64px layout)
+LABEL_BAND_24 = "2.4GHz"
+LABEL_BAND_5 = "5GHz"
+
 # Default rotation ("all") — SUM is optional and never included by default.
 ALL_SCREEN_IDS = ("SYS", "LOD", "TMP", "GRP", "WLC", "TOP", "CLI", "NET", "PIE", "SRV")
 OPTIONAL_SCREEN_IDS = ("SUM",)
@@ -789,13 +793,13 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         _graph(img, d, 1, 45, 62, 17, ram_h, _diagram_color(ram_now, kind="load"), filled=False)
 
     elif sid == "TMP":
-        # Top: CPU | AVG — Bottom: 2G | 5G
+        # Top: CPU | AVG — Bottom: 2.4GHz | 5GHz
         avg = int(m.get("temp_avg", 0) or _temp_avg(m))
         cells = [
             (0, 11, "CPU", int(m.get("temp_cpu", 0) or 0)),
             (32, 11, "AVG", avg),
-            (0, 37, "2G", int(m.get("temp_2g", 0) or 0)),
-            (32, 37, "5G", int(m.get("temp_5g", 0) or 0)),
+            (0, 37, LABEL_BAND_24, int(m.get("temp_2g", 0) or 0)),
+            (32, 37, LABEL_BAND_5, int(m.get("temp_5g", 0) or 0)),
         ]
         for x, y, label, val in cells:
             hot = _is_crit_temp_tile(val)
@@ -874,10 +878,10 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         _draw_client_count(img, 24, 22, wifi)
         _txt(img, 34, 22, "Eth", FG, size="tiny", role="status")
         _draw_client_count(img, 48, 22, wired)
-        _txt(img, 2, 31, "2G", FG, size="tiny", role="status")
-        _txt(img, 14, 30, str(n2), CYAN, size="normal", role="status")
-        _txt(img, 34, 31, "5G", FG, size="tiny", role="status")
-        _txt(img, 46, 30, str(n5), ORANGE, size="normal", role="status")
+        _txt(img, 2, 29, LABEL_BAND_24, FG, size="tiny", role="status")
+        _txt(img, 22, 28, str(n2), CYAN, size="normal", role="status")
+        _txt(img, 34, 29, LABEL_BAND_5, FG, size="tiny", role="status")
+        _txt(img, 50, 28, str(n5), ORANGE, size="normal", role="status")
         d.line([(2, 38), (61, 38)], fill=DIM)
         y = 40
         for row in list(m.get("clients_ssid") or [])[:3]:
