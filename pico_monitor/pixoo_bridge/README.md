@@ -43,7 +43,7 @@ cd pico_monitor
 | `PIXOO_SCREEN_SECONDS` / `--screen-seconds` | `8` | Temps d’affichage par écran (rotation) |
 | `PIXOO_FRAME_INTERVAL` / `--frame-interval` | `1.05` | Intervalle minimum entre pushes HTTP |
 | `PIXOO_BRIGHTNESS` / `--brightness` | `50` | Luminosité Pixoo 0–100 |
-| `PIXOO_SCREENS` / `--screens` | `all` | `all` ou `SYS,LOD,TMP,GRP,WLC,TOP,CLI,NET,PIE,SRV` (≥1). Position bannière `[n]` si >1 écran. |
+| `PIXOO_SCREENS` / `--screens` | `all` | `all` ou `SYS,LOD,TMP,GRP,WLC,TOP,CLI,NET,PIE,SRV` (≥1). Pastille position (chiffre cyan sur fond noir) si >1 écran. |
 
 Ordre logique : System → Load → Temps → Traffic → WiFi/LAN → Top → Clients → Ports → Disk → Services.
 

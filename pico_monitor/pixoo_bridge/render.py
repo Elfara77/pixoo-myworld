@@ -276,13 +276,17 @@ def _header(img, draw: ImageDraw.ImageDraw, title: str, idx: int) -> None:
     screens = get_screen_ids()
     n = len(screens)
     draw.rectangle([0, 0, 63, 9], fill=HEADER)
-    mark = f"[{idx + 1}]" if n > 1 else ""
-    mark_w = pf.text_width_tiny(mark) if mark else 0
-    title_chars = max(3, (62 - mark_w) // 6)
+    badge_w = 0
+    if n > 1:
+        label = str(idx + 1)
+        tw = pf.text_width_tiny(label)
+        badge_w = tw + 4
+        bx0 = 63 - badge_w + 1
+        draw.rectangle([bx0, 1, 63, 8], fill=HEADER_FG, outline=HEADER)
+        pf.draw_tiny(img, bx0 + 2, 2, label, HEADER)
+    title_chars = max(3, (63 - badge_w) // 6)
     shown = _scroll(title, title_chars)
     pf.draw_text(img, 1, 1, shown, HEADER_FG, size="normal")
-    if mark:
-        pf.draw_tiny(img, 63 - mark_w - 1, 2, mark, HEADER_FG)
 
 
 def _gauge(draw, x: int, y: int, w: int, pct: float, color, *, alert: bool = False) -> None:
