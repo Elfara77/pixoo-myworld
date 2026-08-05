@@ -26,7 +26,7 @@ Ne pas mettre l’IP du Pico dans `ROUTER_HOST` (le Pico ne sert pas `/metrics.j
 
 ```
 pico_monitor/
-├── deploy_monitor.sh      # menu ↑/↓ + auto|install|uninstall|status
+├── deploy_monitor.sh      # menu ↑/↓ + auto|install|pilot|start|stop|cron-*
 ├── preview.py             # rendu Mac des écrans → previews/*.png
 ├── firmware/              # à flasher sur le Pico W
 └── merlin/                # déployé sur le routeur
@@ -47,6 +47,8 @@ cp -n .deploy.env.example .deploy.env   # éditer si besoin
 ./deploy_monitor.sh auto            # pipeline complet
 ./deploy_monitor.sh install
 ./deploy_monitor.sh status          # cru + metrics + ping Pico
+./deploy_monitor.sh pilot           # sous-menu pilotage distant
+./deploy_monitor.sh start|stop|cron-on|cron-off
 ```
 
 ### Menu interactif
@@ -54,8 +56,9 @@ cp -n .deploy.env.example .deploy.env   # éditer si besoin
 - Écran effacé à chaque affichage ; statut live (SSH, upload, install, running, cru, metrics HTTP, ping Pico).
 - Navigation **↑/↓** + **ENTER** (surlignage + ligne `Selected ▸ …`). Numéros `1-9` pour sauter ; sinon menu numérique si le mode raw échoue.
 - Premier item : **Mode automatique** — uninstall → clean → upload → install → flash Pico → start watchdog.
+- **Pilotage distant** : sous-menu (même UX) pour start/stop watchdog, cron ON/OFF (`cru a|d PicoMonitor`), état détaillé, test link Pico (`PICO_MERLIN_HOST`), test `/metrics.json` Merlin.
 
-CLI non interactif inchangé : `install|uninstall|status|upload|test|flash|auto`.
+CLI : `install|uninstall|status|upload|test|flash|auto|pilot|start|stop|cron-on|cron-off`.
 
 `.deploy.env` / `~/.pico_monitor_config` (sans mot de passe) :
 

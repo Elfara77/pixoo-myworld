@@ -7,6 +7,8 @@
 #   ./deploy_monitor.sh uninstall
 #   ./deploy_monitor.sh status
 #   ./deploy_monitor.sh auto         # full pipeline (uninstall→upload→install→flash→run)
+#   ./deploy_monitor.sh pilot        # remote pilotage submenu
+#   ./deploy_monitor.sh start|stop|cron-on|cron-off
 #
 # Hosts (do not conflate):
 #   PICO_ROUTER_HOST  Merlin LAN IP — SSH deploy + /metrics.json (default 192.168.50.1)
@@ -353,16 +355,157 @@ install_remote() {
 }
 
 start_watchdog() {
-  echo "==> start watchdog on Merlin ${ROUTER_HOST}"
+  echo "==> start/reload watchdog on Merlin ${ROUTER_HOST}"
   remote "
     if [ -x '${REMOTE_PATH}/watchdog.sh' ]; then
-      '${REMOTE_PATH}/watchdog.sh' start
+      '${REMOTE_PATH}/watchdog.sh' reload 2>/dev/null || '${REMOTE_PATH}/watchdog.sh' start
       '${REMOTE_PATH}/watchdog.sh' status || true
     else
       echo 'watchdog missing — run upload + install first' >&2
       exit 1
     fi
   "
+}
+
+stop_watchdog() {
+  echo "==> stop watchdog on Merlin ${ROUTER_HOST}"
+  remote "
+    if [ -x '${REMOTE_PATH}/watchdog.sh' ]; then
+      '${REMOTE_PATH}/watchdog.sh' stop
+      '${REMOTE_PATH}/watchdog.sh' status 2>/dev/null || echo stopped
+    else
+      echo 'watchdog missing — nothing to stop'
+    fi
+  "
+}
+
+cron_on() {
+  echo "==> cron ON (cru a PicoMonitor) on Merlin ${ROUTER_HOST}"
+  remote "
+    if [ ! -x /usr/sbin/cru ]; then
+      echo 'error: /usr/sbin/cru missing' >&2
+      exit 1
+    fi
+    if [ ! -x '${REMOTE_PATH}/watchdog.sh' ]; then
+      echo 'error: watchdog missing — run upload + install first' >&2
+      exit 1
+    fi
+    /usr/sbin/cru d PicoMonitor 2>/dev/null || true
+    /usr/sbin/cru a PicoMonitor '*/1 * * * * ${REMOTE_PATH}/watchdog.sh'
+    echo '-- cru --'
+    /usr/sbin/cru l 2>/dev/null | grep -i PicoMonitor || /usr/sbin/cru l
+    echo 'cron: PicoMonitor ON'
+  "
+}
+
+cron_off() {
+  echo "==> cron OFF (cru d PicoMonitor) on Merlin ${ROUTER_HOST}"
+  remote "
+    if [ ! -x /usr/sbin/cru ]; then
+      echo 'error: /usr/sbin/cru missing' >&2
+      exit 1
+    fi
+    /usr/sbin/cru d PicoMonitor 2>/dev/null || true
+    echo '-- cru --'
+    if /usr/sbin/cru l 2>/dev/null | grep -qi PicoMonitor; then
+      /usr/sbin/cru l 2>/dev/null | grep -i PicoMonitor
+      echo 'warn: PicoMonitor entry still present'
+    else
+      echo '(no PicoMonitor cru entry)'
+      echo 'cron: PicoMonitor OFF'
+    fi
+  "
+}
+
+# Detailed remote state for pilotage (pid, cru, services-start, metrics, Pico)
+pilot_status() {
+  echo "==> État détaillé — Merlin ${ROUTER_HOST} + Pico ${PICO_HOST}"
+  compute_status
+  render_status_block
+  echo ""
+  remote "
+    echo '-- daemon (pid) --'
+    if [ -x '${REMOTE_PATH}/watchdog.sh' ]; then
+      '${REMOTE_PATH}/watchdog.sh' status 2>/dev/null || echo stopped
+      if [ -f '${REMOTE_PATH}/run/pico_metrics.pid' ]; then
+        echo \"pidfile=\$(cat '${REMOTE_PATH}/run/pico_metrics.pid' 2>/dev/null)\"
+      fi
+    else
+      echo 'not installed (no watchdog.sh)'
+    fi
+    echo '-- cru --'
+    if [ -x /usr/sbin/cru ]; then
+      /usr/sbin/cru l 2>/dev/null | grep -i PicoMonitor || echo '(no PicoMonitor cru entry)'
+    else
+      echo 'cru missing'
+    fi
+    echo '-- services-start --'
+    if [ -f /jffs/scripts/services-start ]; then
+      grep -n pico_monitor /jffs/scripts/services-start 2>/dev/null || echo '(no pico_monitor hook)'
+    else
+      echo '(no services-start file)'
+    fi
+    echo '-- metrics local --'
+    if [ -x /opt/bin/wget ]; then
+      /opt/bin/wget -qO- --timeout=4 http://127.0.0.1:${METRICS_PORT}/metrics.json 2>/dev/null | head -c 120
+      echo
+    elif [ -x /usr/bin/wget ]; then
+      /usr/bin/wget -qO- --timeout=4 http://127.0.0.1:${METRICS_PORT}/metrics.json 2>/dev/null | head -c 120
+      echo
+    else
+      echo '(wget unavailable on router — use local curl below)'
+    fi
+  " 2>/dev/null || echo "(SSH unavailable — local probes only)"
+  echo ""
+  echo "-- metrics HTTP (from this host) --"
+  if metrics_http_ok; then
+    echo "YES  http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json"
+  else
+    echo "no   http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json"
+  fi
+  echo "-- Pico ping (PICO_MERLIN_HOST=${PICO_HOST}) --"
+  if pico_ping_ok; then
+    echo "YES  ${PICO_HOST}"
+  else
+    echo "no   ${PICO_HOST}"
+  fi
+}
+
+# Ping Pico + optional HTTP; note that metrics live on Merlin (Pico is client)
+test_link_pico() {
+  echo "==> Test link Pico (PICO_MERLIN_HOST=${PICO_HOST})"
+  echo "    Merlin metrics target: ${ROUTER_HOST}:${METRICS_PORT} (PICO_ROUTER_HOST)"
+  echo ""
+  if pico_ping_ok; then
+    echo "ping: OK — Pico reachable at ${PICO_HOST}"
+  else
+    echo "ping: FAIL — Pico NOT reachable at ${PICO_HOST}"
+    echo "  → check Wi‑Fi / flash firmware / PICO_MERLIN_HOST"
+  fi
+  echo ""
+  echo "-- optional HTTP on Pico (usually none — Pico pulls metrics, does not serve them) --"
+  local http_ok=0
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsS --max-time 3 "http://${PICO_HOST}/" >/dev/null 2>&1 \
+      || curl -fsS --max-time 3 "http://${PICO_HOST}:${METRICS_PORT}/metrics.json" >/dev/null 2>&1; then
+      http_ok=1
+    fi
+  fi
+  if (( http_ok )); then
+    echo "HTTP: something answered on Pico (unexpected but OK)"
+  else
+    echo "HTTP: no listener on Pico (expected) — OLED firmware fetches Merlin /metrics.json"
+  fi
+  echo ""
+  echo "Note (Pico perspective): firmware ROUTER_HOST must be ${ROUTER_HOST}"
+  echo "  and ROUTER_PORT=${METRICS_PORT}. Metrics are on Merlin, not on the Pico."
+  echo ""
+  if metrics_http_ok; then
+    echo "Merlin /metrics.json: reachable from this host (what Pico should poll)"
+  else
+    echo "Merlin /metrics.json: NOT reachable from this host — Pico will show ROUTER OFFLINE"
+  fi
+  pico_ping_ok
 }
 
 autostart() {
@@ -578,7 +721,7 @@ clear_screen() {
   fi
 }
 
-# Menu items: label|action  (action = function name or quit)
+# Menu items: label|action  (action = function name or quit/back)
 MENU_ITEMS=(
   "Mode automatique (pipeline complet)|auto_mode"
   "Prerequisites / SSH + ping Pico|check_prereq"
@@ -586,6 +729,7 @@ MENU_ITEMS=(
   "Upload merlin package|upload"
   "Install (opkg + cru + start)|do_install"
   "Flash Pico firmware (mpremote/manual)|flash_pico"
+  "Pilotage distant|pilotage_menu"
   "Start / restart watchdog|start_watchdog"
   "Autostart status (cru)|autostart"
   "Test /metrics.json (Merlin)|test_metrics"
@@ -593,6 +737,17 @@ MENU_ITEMS=(
   "Uninstall|uninstall_remote"
   "Refresh status|status_remote"
   "Quit|quit"
+)
+
+PILOT_MENU_ITEMS=(
+  "Start metrics service (watchdog start/reload)|start_watchdog"
+  "Stop metrics service|stop_watchdog"
+  "Cron ON (cru a PicoMonitor)|cron_on"
+  "Cron OFF (cru d PicoMonitor)|cron_off"
+  "État détaillé|pilot_status"
+  "Test link Pico|test_link_pico"
+  "Test metrics Merlin|test_metrics"
+  "Retour|back"
 )
 
 do_install() {
@@ -672,14 +827,33 @@ menu_action() {
   printf '%s' "${item#*|}"
 }
 
+# Draw menu from items named by $1 (MENU_ITEMS|PILOT_MENU_ITEMS), selection $2
 draw_menu() {
-  local sel="$1"
+  local items_name="$1"
+  local sel="$2"
   local i=0
-  local n=${#MENU_ITEMS[@]}
-  local label
+  local n label
+  local -a items
+
+  case "${items_name}" in
+    PILOT_MENU_ITEMS) items=("${PILOT_MENU_ITEMS[@]}") ;;
+    *) items=("${MENU_ITEMS[@]}") ;;
+  esac
+  n=${#items[@]}
 
   clear_screen
-  cat <<EOF
+  if [[ "${items_name}" == "PILOT_MENU_ITEMS" ]]; then
+    cat <<EOF
+╔══════════════════════════════════════════╗
+║  Pilotage distant — Merlin / Pico        ║
+║  Merlin SSH: ${USER_NAME}@${ROUTER_HOST}
+║  Pico W:     ${PICO_HOST}
+║  Remote:     ${REMOTE_PATH}
+╚══════════════════════════════════════════╝
+
+EOF
+  else
+    cat <<EOF
 ╔══════════════════════════════════════════╗
 ║  Pico Monitor → Merlin deploy            ║
 ║  Merlin SSH: ${USER_NAME}@${ROUTER_HOST}
@@ -688,26 +862,35 @@ draw_menu() {
 ╚══════════════════════════════════════════╝
 
 EOF
+  fi
   render_status_block
   echo ""
-  echo "  ↑/↓ move  ·  ENTER run  ·  1-9 jump  ·  q quit"
+  if [[ "${items_name}" == "PILOT_MENU_ITEMS" ]]; then
+    echo "  ↑/↓ move  ·  ENTER run  ·  1-8 jump  ·  q quit"
+  else
+    echo "  ↑/↓ move  ·  ENTER run  ·  1-9 jump  ·  q quit"
+  fi
   echo ""
 
   for ((i = 0; i < n; i++)); do
-    label="$(menu_label "${MENU_ITEMS[$i]}")"
+    label="$(menu_label "${items[$i]}")"
     if (( i == sel )); then
-      printf '  \033[7m > %2d) %-42s \033[0m\n' "$((i + 1))" "${label}"
+      printf '  \033[7m > %2d) %-48s \033[0m\n' "$((i + 1))" "${label}"
     else
       printf '     %2d) %s\n' "$((i + 1))" "${label}"
     fi
   done
 
   echo ""
-  label="$(menu_label "${MENU_ITEMS[$sel]}")"
+  label="$(menu_label "${items[$sel]}")"
   printf '  Selected ▸ %s\n' "${label}"
   echo ""
-  echo "  OLED: Merlin metrics ≠ Pico pixels."
-  echo "  Flash firmware/ + WIFI + ROUTER_HOST=${ROUTER_HOST}"
+  if [[ "${items_name}" == "PILOT_MENU_ITEMS" ]]; then
+    echo "  start/stop/cron via SSH · Pico = PICO_MERLIN_HOST"
+  else
+    echo "  OLED: Merlin metrics ≠ Pico pixels."
+    echo "  Flash firmware/ + WIFI + ROUTER_HOST=${ROUTER_HOST}"
+  fi
 }
 
 pause_return() {
@@ -719,13 +902,20 @@ run_menu_action() {
   local action="$1"
   case "${action}" in
     quit) exit 0 ;;
+    back) return 0 ;;
     auto_mode) auto_mode ;;
     check_prereq) check_prereq || true ;;
     configure_router) configure_router ;;
     upload) upload ;;
     do_install) do_install ;;
     flash_pico) flash_pico || true ;;
+    pilotage_menu) pilotage_menu ;;
     start_watchdog) start_watchdog || true ;;
+    stop_watchdog) stop_watchdog || true ;;
+    cron_on) cron_on || true ;;
+    cron_off) cron_off || true ;;
+    pilot_status) pilot_status || true ;;
+    test_link_pico) test_link_pico || true ;;
     autostart) autostart ;;
     test_metrics) test_metrics || true ;;
     show_logs) show_logs ;;
@@ -735,18 +925,27 @@ run_menu_action() {
   esac
 }
 
+# Generic arrow menu. $1 = MENU_ITEMS|PILOT_MENU_ITEMS
+# Returns when action is "back" (submenu). quit exits the process.
 menu_arrow() {
+  local items_name="${1:-MENU_ITEMS}"
   local sel=0
-  local n=${#MENU_ITEMS[@]}
-  local key action idx
+  local n key action idx
   local need_status=1
+  local -a items
+
+  case "${items_name}" in
+    PILOT_MENU_ITEMS) items=("${PILOT_MENU_ITEMS[@]}") ;;
+    *) items=("${MENU_ITEMS[@]}") ;;
+  esac
+  n=${#items[@]}
 
   while true; do
     if (( need_status )); then
       compute_status || true
       need_status=0
     fi
-    draw_menu "${sel}"
+    draw_menu "${items_name}" "${sel}"
     key="$(read_menu_key)" || key="other"
     case "${key}" in
       up)
@@ -756,7 +955,16 @@ menu_arrow() {
         sel=$(( (sel + 1) % n ))
         ;;
       enter)
-        action="$(menu_action "${MENU_ITEMS[$sel]}")"
+        action="$(menu_action "${items[$sel]}")"
+        if [[ "${action}" == "back" ]]; then
+          return 0
+        fi
+        if [[ "${action}" == "pilotage_menu" ]]; then
+          clear_screen
+          pilotage_menu
+          need_status=1
+          continue
+        fi
         clear_screen
         run_menu_action "${action}"
         [[ "${action}" == "quit" ]] && exit 0
@@ -764,10 +972,13 @@ menu_arrow() {
         need_status=1
         ;;
       quit)
+        if [[ "${items_name}" == "PILOT_MENU_ITEMS" ]]; then
+          return 0
+        fi
         exit 0
         ;;
       digit:*)
-        # Jump highlight to item N (1-9); ENTER confirms. Items 10+ use arrows.
+        # Jump highlight to item N (1-9); ENTER confirms.
         idx="${key#digit:}"
         if [[ "${idx}" =~ ^[1-9]$ ]] && (( idx >= 1 && idx <= n )); then
           sel=$((idx - 1))
@@ -781,12 +992,31 @@ menu_arrow() {
 }
 
 menu_number_fallback() {
-  local c n=${#MENU_ITEMS[@]}
-  local i label action
+  local items_name="${1:-MENU_ITEMS}"
+  local c n i label action
+  local -a items
+
+  case "${items_name}" in
+    PILOT_MENU_ITEMS) items=("${PILOT_MENU_ITEMS[@]}") ;;
+    *) items=("${MENU_ITEMS[@]}") ;;
+  esac
+  n=${#items[@]}
+
   while true; do
     compute_status || true
     clear_screen
-    cat <<EOF
+    if [[ "${items_name}" == "PILOT_MENU_ITEMS" ]]; then
+      cat <<EOF
+╔══════════════════════════════════════════╗
+║  Pilotage distant — Merlin / Pico        ║
+║  Merlin SSH: ${USER_NAME}@${ROUTER_HOST}
+║  Pico W:     ${PICO_HOST}
+║  Remote:     ${REMOTE_PATH}
+╚══════════════════════════════════════════╝
+
+EOF
+    else
+      cat <<EOF
 ╔══════════════════════════════════════════╗
 ║  Pico Monitor → Merlin deploy            ║
 ║  Merlin SSH: ${USER_NAME}@${ROUTER_HOST}
@@ -795,19 +1025,27 @@ menu_number_fallback() {
 ╚══════════════════════════════════════════╝
 
 EOF
+    fi
     render_status_block
     echo ""
     echo "  (arrow keys unavailable — use numbers)"
     echo ""
     for ((i = 0; i < n; i++)); do
-      label="$(menu_label "${MENU_ITEMS[$i]}")"
+      label="$(menu_label "${items[$i]}")"
       printf '  %2d) %s\n' "$((i + 1))" "${label}"
     done
     echo ""
     read -r -p "Choice [1-${n}]: " c
     if [[ "${c}" =~ ^[0-9]+$ ]] && (( c >= 1 && c <= n )); then
-      action="$(menu_action "${MENU_ITEMS[$((c - 1))]}")"
-      printf '  Selected ▸ %s\n\n' "$(menu_label "${MENU_ITEMS[$((c - 1))]}")"
+      action="$(menu_action "${items[$((c - 1))]}")"
+      if [[ "${action}" == "back" ]]; then
+        return 0
+      fi
+      printf '  Selected ▸ %s\n\n' "$(menu_label "${items[$((c - 1))]}")"
+      if [[ "${action}" == "pilotage_menu" ]]; then
+        pilotage_menu
+        continue
+      fi
       run_menu_action "${action}"
       [[ "${action}" == "quit" ]] && exit 0
       pause_return
@@ -818,18 +1056,26 @@ EOF
   done
 }
 
+pilotage_menu() {
+  if menu_raw_supported; then
+    menu_arrow PILOT_MENU_ITEMS
+  else
+    menu_number_fallback PILOT_MENU_ITEMS
+  fi
+}
+
 menu() {
   load_config
   if menu_raw_supported; then
-    menu_arrow
+    menu_arrow MENU_ITEMS
   else
-    menu_number_fallback
+    menu_number_fallback MENU_ITEMS
   fi
 }
 
 usage() {
   cat <<EOF
-Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash]
+Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash|pilot|start|stop|cron-on|cron-off]
 
   (no args) / menu   Interactive menu (↑/↓ + ENTER, or numbers)
   auto               Full pipeline: uninstall→clean→upload→install→flash→start
@@ -839,6 +1085,11 @@ Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash]
   upload             Sync merlin/ only
   test               GET /metrics.json
   flash              Pico firmware sync (mpremote) or print steps
+  pilot              Remote pilotage submenu (start/stop/cron/status/tests)
+  start              Start/reload metrics watchdog on Merlin
+  stop               Stop metrics watchdog on Merlin
+  cron-on            Enable cru job PicoMonitor
+  cron-off           Disable cru job PicoMonitor
 
 Env / .deploy.env:
   PICO_ROUTER_HOST  Merlin LAN IP for SSH + metrics (default 192.168.50.1)
@@ -865,5 +1116,10 @@ case "${CMD}" in
   upload) upload ;;
   test) test_metrics ;;
   flash) flash_pico ;;
+  pilot|pilotage) pilotage_menu ;;
+  start) start_watchdog ;;
+  stop) stop_watchdog ;;
+  cron-on|cron_on) cron_on ;;
+  cron-off|cron_off) cron_off ;;
   *) usage; exit 2 ;;
 esac
