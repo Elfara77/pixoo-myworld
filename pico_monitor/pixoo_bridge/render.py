@@ -313,13 +313,14 @@ def _is_crit_temp(label: str, val: int) -> bool:
     return False
 
 
-def _rate_unit_color(unit: str) -> tuple[int, int, int]:
-    """Throughput tier color: K=green, M=red, G=yellow (value + unit match)."""
+def _rate_display_color(mbps: float, num: str, unit: str) -> tuple[int, int, int]:
+    """Throughput: 0K inactive gray; K>0 green; M/G yellow (no red)."""
+    blob = f"{num}{unit}".lower().replace(" ", "")
+    if blob.startswith("0k") or (num.strip() in ("0", "0.0") and unit.upper().startswith("K")):
+        return DIM
     u = unit.strip().upper()
-    if u.startswith("G"):
+    if u.startswith("G") or u.startswith("M"):
         return YELLOW
-    if u.startswith("M"):
-        return RED
     if u.startswith("K"):
         return GREEN
     return FG
@@ -335,7 +336,7 @@ def _draw_rate(
     alert: bool = False,
 ) -> int:
     num, unit = _split_rate(mbps)
-    col = _rate_unit_color(unit)
+    col = _rate_display_color(mbps, num, unit)
     return _draw_val_unit(
         img, x, y, num, unit, col, size=size, value_role="status", alert=alert
     )
@@ -694,10 +695,17 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
                 else _is_crit_temp_tile(int(val))
             )
         )
-        _txt(img, 1, y, label, LABEL, size="tiny", role="label", alert=alert)
-        _draw_val_unit(img, 16, y, str(int(val)), unit, col, size="tiny", value_role="status", alert=alert)
+        temp_hot = kind == "temp_cpu" and _is_crit_temp_tile(int(val))
+        blink_alert = alert and not temp_hot
+        if temp_hot:
+            _txt(img, 1, y, label, RED, size="tiny", role="status")
+        else:
+            _txt(img, 1, y, label, LABEL, size="tiny", role="label", alert=blink_alert)
+        _draw_val_unit(
+            img, 16, y, str(int(val)), unit, col, size="tiny", value_role="status", alert=blink_alert
+        )
         bar_pct = val if kind != "temp_cpu" else min(100.0, (val / max(float(CRIT_TEMP_CPU), 1.0)) * 100.0)
-        _gauge(d, 36, y + 1, 27, bar_pct, col, alert=alert)
+        _gauge(d, 36, y + 1, 27, bar_pct, col, alert=blink_alert)
         y += 6
 
     _txt(img, 1, y, "Dn", LABEL, size="tiny", role="label")
@@ -816,7 +824,15 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
             col = RED if hot else _temp_tile_color(val)
             outline = RED if hot else DIM
             d.rectangle([x, y, x + 31, y + 24], outline=outline)
-            _txt(img, x + 2, y + 2, label, LABEL, size="tiny", role="label")
+            _txt(
+                img,
+                x + 2,
+                y + 2,
+                label,
+                RED if hot else LABEL,
+                size="tiny",
+                role="status" if hot else "label",
+            )
             _draw_val_unit(
                 img,
                 x + 2,
