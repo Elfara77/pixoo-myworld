@@ -400,6 +400,15 @@ def _draw_val_unit(
     return x
 
 
+def _cli_count_color(n: int) -> tuple[int, int, int]:
+    return DIM if int(n or 0) == 0 else GREEN
+
+
+def _draw_cli_count(img, x: int, y: int, n: int, *, size: str = "tiny") -> int:
+    n = int(n or 0)
+    return _txt(img, x, y, str(n), _cli_count_color(n), size=size, role="status")
+
+
 def _draw_client_count(img, x: int, y: int, n: int, *, size: str = "tiny") -> int:
     """Client totals: green if >0, red + optional blink if 0."""
     n = int(n or 0)
@@ -982,16 +991,16 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         wired = int(m.get("clients_wired", 0) or max(0, total - wifi))
         n2 = int(m.get("clients_2g", 0) or 0)
         n5 = int(m.get("clients_5g", 0) or 0)
-        _txt(img, 2, 10, "All", LABEL, size="normal", role="label", label_negligible=(total <= 0))
-        _draw_client_count(img, 2 + pf.text_width("All", size="normal") + 3, 10, total, size="normal")
-        _txt(img, 2, 22, "WiFi", FG, size="tiny", role="status")
-        _draw_client_count(img, 24, 22, wifi)
-        _txt(img, 34, 22, "Eth", FG, size="tiny", role="status")
-        _draw_client_count(img, 48, 22, wired)
-        _txt(img, 2, 29, LABEL_BAND_24, LABEL, size="tiny", role="label", label_negligible=(n2 <= 0))
-        _txt(img, 22, 29, str(n2), CYAN, size="tiny", role="status")
-        _txt(img, 34, 29, LABEL_BAND_5, LABEL, size="tiny", role="label", label_negligible=(n5 <= 0))
-        _txt(img, 50, 29, str(n5), ORANGE, size="tiny", role="status")
+        _txt(img, 2, 10, "All", LABEL, size="normal", role="label")
+        _draw_cli_count(img, 2 + pf.text_width("All", size="normal") + 3, 10, total, size="normal")
+        _txt(img, 2, 22, "WiFi", LABEL, size="tiny", role="label")
+        _draw_cli_count(img, 24, 22, wifi)
+        _txt(img, 34, 22, "Eth", LABEL, size="tiny", role="label")
+        _draw_cli_count(img, 48, 22, wired)
+        _txt(img, 2, 29, LABEL_BAND_24, LABEL, size="tiny", role="label")
+        _draw_cli_count(img, 22, 29, n2)
+        _txt(img, 34, 29, LABEL_BAND_5, LABEL, size="tiny", role="label")
+        _draw_cli_count(img, 50, 29, n5)
         d.line([(2, 38), (61, 38)], fill=DIM)
         y = 40
         for row in list(m.get("clients_ssid") or [])[:3]:
@@ -999,8 +1008,8 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
                 name, n = str(row.get("ssid", "?")), int(row.get("n", 0))
             except (AttributeError, TypeError, ValueError):
                 continue
-            _txt(img, 2, y, _scroll(name, 8), FG, size="tiny", role="status")
-            _txt(img, 50, y, str(n), CYAN, size="normal", role="status")
+            _txt(img, 2, y, _scroll(name, 8), LABEL, size="tiny", role="label")
+            _draw_cli_count(img, 50, y, n)
             y += 8
 
     elif sid == "NET":
