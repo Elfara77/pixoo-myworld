@@ -562,8 +562,12 @@ def _pick_top(rows: list | None, limit: int = 2) -> list[tuple[str, float]]:
         parsed.append((name, max(0.0, rate)))
     if not parsed:
         return []
-    nonzero = [p for p in parsed if p[1] > 0]
-    return (nonzero if nonzero else parsed)[:limit]
+    ordered = sorted(parsed, key=lambda x: x[1], reverse=True)
+    active = [p for p in ordered if p[1] > 0]
+    if len(active) >= limit:
+        return active[:limit]
+    rest = [p for p in ordered if p not in active]
+    return (active + rest)[:limit]
 
 
 def _active_vpns(m: dict[str, Any]) -> list[tuple[str, str]]:
@@ -840,28 +844,24 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
 
     elif sid == "TOP":
         _txt(img, 2, 11, "Down", LABEL, size="tiny", role="label")
-        y = 18
-        downs = _pick_top(m.get("top_down"))
+        downs = _pick_top(m.get("top_down"), limit=2)
         if not downs:
-            _txt(img, 2, y, "(none)", DIM, size="tiny", role="label")
-            y += 9
-        for name, rate in downs:
-            _txt(img, 2, y, _scroll(name, 6), FG, size="normal", role="value")
-            _draw_rate(img, 40, y + 1, rate)
-            y += 9
-        y = max(y + 1, 37)
-        d.line([(2, y - 1), (61, y - 1)], fill=DIM)
-        _txt(img, 2, y, "Up", LABEL, size="tiny", role="label")
-        y += 7
-        ups = _pick_top(m.get("top_up"))
+            _txt(img, 2, 18, "(none)", DIM, size="tiny", role="label")
+        else:
+            for i, (name, rate) in enumerate(downs[:2]):
+                row_y = 18 + i * 8
+                _txt(img, 2, row_y, _scroll(name, 8), FG, size="tiny", role="value")
+                _draw_rate(img, 42, row_y, rate)
+        d.line([(2, 33), (61, 33)], fill=DIM)
+        _txt(img, 2, 35, "Up", LABEL, size="tiny", role="label")
+        ups = _pick_top(m.get("top_up"), limit=2)
         if not ups:
-            _txt(img, 2, y, "(none)", DIM, size="tiny", role="label")
-        for name, rate in ups:
-            if y > 55:
-                break
-            _txt(img, 2, y, _scroll(name, 6), FG, size="normal", role="value")
-            _draw_rate(img, 40, y + 1, rate)
-            y += 9
+            _txt(img, 2, 44, "(none)", DIM, size="tiny", role="label")
+        else:
+            for i, (name, rate) in enumerate(ups[:2]):
+                row_y = 44 + i * 8
+                _txt(img, 2, row_y, _scroll(name, 8), FG, size="tiny", role="value")
+                _draw_rate(img, 42, row_y, rate)
 
     elif sid == "CLI":
         total = int(m.get("clients", 0) or 0)
