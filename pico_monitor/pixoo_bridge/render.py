@@ -911,9 +911,9 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         _txt(img, 34, 22, "Eth", FG, size="tiny", role="status")
         _draw_client_count(img, 48, 22, wired)
         _txt(img, 2, 29, LABEL_BAND_24, FG, size="tiny", role="status")
-        _txt(img, 22, 28, str(n2), CYAN, size="normal", role="status")
+        _txt(img, 22, 29, str(n2), CYAN, size="tiny", role="status")
         _txt(img, 34, 29, LABEL_BAND_5, FG, size="tiny", role="status")
-        _txt(img, 50, 28, str(n5), ORANGE, size="normal", role="status")
+        _txt(img, 50, 29, str(n5), ORANGE, size="tiny", role="status")
         d.line([(2, 38), (61, 38)], fill=DIM)
         y = 40
         for row in list(m.get("clients_ssid") or [])[:3]:
