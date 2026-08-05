@@ -974,20 +974,26 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         _gauge_row(img, d, y, "JFFS", float(jffs.get("used", 0) or 0), kind="disk")
         y += 9
         u2_on = bool(usb2.get("present"))
-        u2_used = float(usb2.get("used", 0) or usb.get("used", 0) or 0)
+        u2_used = float(usb2.get("used", 0) or usb.get("used", 0) or 0) if u2_on else 0.0
         _txt(img, 2, y, "USB2", GREEN if u2_on else RED, size="tiny", role="status")
         if u2_on:
-            _gauge(d, 24, y, 38, u2_used, _diagram_color(u2_used, kind="disk"), alert=_is_crit_disk(u2_used))
+            _gauge(
+                d, 20, y, 42, u2_used, _diagram_color(u2_used, kind="disk"), alert=_is_crit_disk(u2_used)
+            )
         else:
-            _txt(img, 28, y, "off", RED, size="tiny", role="status")
+            _gauge(d, 20, y, 42, 0, BAR_BG)
+            _txt(img, 24, y, "off", RED, size="tiny", role="status")
         y += 9
         u3_on = bool(usb3.get("present"))
-        u3_used = float(usb3.get("used", 0) or 0)
+        u3_used = float(usb3.get("used", 0) or 0) if u3_on else 0.0
         _txt(img, 2, y, "USB3", GREEN if u3_on else RED, size="tiny", role="status")
         if u3_on:
-            _gauge(d, 24, y, 38, u3_used, _diagram_color(u3_used, kind="disk"), alert=_is_crit_disk(u3_used))
+            _gauge(
+                d, 20, y, 42, u3_used, _diagram_color(u3_used, kind="disk"), alert=_is_crit_disk(u3_used)
+            )
         else:
-            _txt(img, 28, y, "off", RED, size="tiny", role="status")
+            _gauge(d, 20, y, 42, 0, BAR_BG)
+            _txt(img, 24, y, "off", RED, size="tiny", role="status")
 
     else:
         _txt(img, 2, 20, sid[:8], DIM, size="tiny", role="label")
