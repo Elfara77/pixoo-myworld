@@ -39,8 +39,15 @@ class SSD1306_I2C(framebuf.FrameBuffer):
         self.i2c.writeto(self.addr, bytes((0x80, cmd)))
 
     def write_data(self, buf):
-        # chunk to avoid large I2C writes
-        self.i2c.writeto(self.addr, b"\x40" + buf)
+        # Chunk to avoid SoftI2C / small-buffer I2C write limits.
+        # Prefix each chunk with 0x40 (data mode).
+        mv = memoryview(buf)
+        i = 0
+        n = len(buf)
+        while i < n:
+            chunk = bytes(mv[i : i + 16])
+            self.i2c.writeto(self.addr, b"\x40" + chunk)
+            i += 16
 
     def init_display(self):
         for cmd in (

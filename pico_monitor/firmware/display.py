@@ -40,7 +40,21 @@ def init(i2c=None, width=64, height=64, addr=0x3C):
 
     _oled = SSD1306_I2C(width, height, i2c, addr=addr)
     _fb = _oled
+    try:
+        _oled.contrast(255)
+        _oled.poweron()
+    except Exception:
+        pass
     return _fb
+
+
+def max_contrast():
+    if _oled is not None:
+        try:
+            _oled.contrast(255)
+            _oled.poweron()
+        except Exception:
+            pass
 
 
 def fb():
@@ -298,6 +312,32 @@ def draw_progress_ring(x, y, size, percent, thickness=2):
             elif r == ro or r == ri:
                 if (i & 1) == 0:
                     _fb.pixel(px, py, 1)
+
+
+def draw_boot_test_pattern(label="BOOT"):
+    """First paint on real glass — checker + label. No fancy fonts required.
+
+    Call this before Wi‑Fi. Even if glyph tables are incomplete, the
+    checkerboard proves I2C + SSD1306 init worked.
+    """
+    ensure_fb()
+    clear()
+    # Checkerboard — visible even if text path is broken
+    for y in range(0, 64, 8):
+        for x in range(0, 64, 8):
+            if ((x // 8) + (y // 8)) & 1:
+                _fb.fill_rect(x, y, 8, 8, 1)
+    # Solid bar + label for readable boot marker
+    _fb.fill_rect(0, 24, 64, 16, 1)
+    try:
+        text = (label or "BOOT")[:8].upper()
+        tw = fonts.text_width_normal(text)
+        fonts.draw_normal(_fb, max(1, (64 - tw) // 2), 28, text, 0)
+    except Exception:
+        # Extreme fallback: 4 white blocks spelling nothing but proving draw
+        for i in range(4):
+            _fb.fill_rect(8 + i * 12, 28, 8, 8, 0)
+    show()
 
 
 def draw_status_banner(msg="OFFLINE"):

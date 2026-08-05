@@ -94,7 +94,10 @@ async def main():
     _ensure_runtime()
     mgr = screens.manager()
     # Paint immediately — never leave a black panel waiting on first fetch.
-    display.draw_status_banner("WAIT DATA")
+    try:
+        display.draw_boot_test_pattern("WAIT")
+    except Exception:
+        display.draw_status_banner("WAIT DATA")
     if getattr(config, "DEMO", 0):
         mgr.update_data(router_client.fetch_all_metrics())
 
@@ -103,6 +106,8 @@ async def main():
         create = asyncio.create_task
     except AttributeError:
         create = None
+
+    screen_every = max(2.0, float(getattr(config, "SCREEN_INTERVAL_S", 5)))
 
     if create is not None:
         create(fetch_task(mgr))
@@ -123,11 +128,11 @@ async def main():
             if msg:
                 display.set_blink(True)
                 display.draw_offline_banner(msg)
+                await asyncio.sleep(screen_every)
             else:
                 for fn in screens.SCREENS:
                     fn()
-                    await asyncio.sleep(getattr(config, "SCREEN_INTERVAL_S", 4))
-            await asyncio.sleep(getattr(config, "FETCH_INTERVAL_S", 3))
+                    await asyncio.sleep(screen_every)
 
 
 if __name__ == "__main__":

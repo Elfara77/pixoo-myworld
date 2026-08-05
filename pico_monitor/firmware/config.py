@@ -15,9 +15,9 @@ ROUTER_HOST = "192.168.50.1"
 ROUTER_PORT = 8088
 METRICS_PATH = "/metrics.json"
 
-# Timing
+# Timing (borrowed from working Pixoo cadence: sample ~3s, screen ~4–8s)
 FETCH_INTERVAL_S = 3
-SCREEN_INTERVAL_S = 4
+SCREEN_INTERVAL_S = 5
 HISTORY_LEN = 64  # graph points (~2–3 min at 3s fetch)
 
 # Temp alert thresholds (°C)

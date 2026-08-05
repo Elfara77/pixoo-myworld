@@ -1,17 +1,31 @@
 # monitoring_pixoo64
 
-Moniteur de métriques AsusWRT-Merlin pour Pico W + OLED SSD1306 64×64, avec exporteur HTTP installé sur le routeur.
+Deux cibles **distinctes** (ne pas les mélanger) :
 
-| Package | Cible | Doc |
-|---|---|---|
-| [`pico_monitor/`](pico_monitor/) | Pico W + OLED SSD1306 64×64 (+ exporteur HTTP Merlin) | [pico_monitor/README.md](pico_monitor/README.md) |
+| Cible | IP typique | Comment ça affiche | Package |
+|-------|------------|--------------------|---------|
+| **Divoom Pixoo 64** | `192.168.52.4` (HTTP `:80/post`) | Push RGB depuis le Mac / Merlin | [`pico_monitor/pixoo_bridge/`](pico_monitor/pixoo_bridge/) |
+| **Pico W + SSD1306** | autre IP LAN | Firmware MicroPython flasché, I2C OLED | [`pico_monitor/firmware/`](pico_monitor/firmware/) |
 
-## Démarrage rapide
+L’exporteur Merlin (`:8088/metrics.json`) alimente les deux.
+
+## Voir une image **maintenant** (Pixoo)
+
+Si `curl` sur `/post` répond `error_code: 0`, c’est un **Pixoo** — pas un Pico :
 
 ```bash
 cd pico_monitor
-./deploy_monitor.sh          # menu install / status / uninstall
-# puis flasher firmware/ sur le Pico (voir README du package)
+./pixoo_bridge/run.sh --demo    # image immédiate
+./deploy_monitor.sh start       # metrics Merlin (pour le mode live)
+./pixoo_bridge/run.sh           # live
 ```
 
-L’ancien moniteur Mac (`src/pixoo_monitor/`, Pipenv, `scripts/`) et la pile Pixoo sur Merlin (`asus_merlin/`) ont été retirés ; le livrable actif est `pico_monitor/`.
+## Pico OLED
+
+```bash
+cd pico_monitor
+./deploy_monitor.sh             # Merlin metrics
+# puis flasher firmware/ sur le Pico (Thonny / mpremote)
+```
+
+Détails : [pico_monitor/README.md](pico_monitor/README.md).

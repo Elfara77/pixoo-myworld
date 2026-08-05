@@ -2,10 +2,16 @@
 
 Dashboard OLED 1-bit (6 écrans) alimenté par un **exporteur HTTP** sur Asuswrt-Merlin.
 
+> **Pixoo ≠ Pico.** Un Divoom Pixoo 64 (souvent `192.168.52.4`, HTTP `/post`)
+> n’affiche **jamais** le firmware MicroPython. Pour le Pixoo, utiliser
+> [`pixoo_bridge/`](pixoo_bridge/) (push RGB, héritage `asus_merlin`).
+
 ```
 Mac/Linux ──deploy_monitor.sh──► Merlin 192.168.50.1:8088 /metrics.json
-Pico W 192.168.52.4 ──Wi‑Fi──► Merlin 192.168.50.1:8088 /metrics.json
+Pico W (autre IP) ──Wi‑Fi──► Merlin 192.168.50.1:8088 /metrics.json
 Pico W               ──I2C───► SSD1306 64×64
+
+Mac ──pixoo_bridge──► Pixoo 192.168.52.4 /post   (RGB, pas le firmware)
 ```
 
 **Merlin metrics ≠ OLED.** Si `/metrics.json` répond mais l’écran reste noir, le Pico n’a pas le firmware / Wi‑Fi / I2C corrects. Flasher `firmware/`.
@@ -15,10 +21,11 @@ Pico W               ──I2C───► SSD1306 64×64
 | Variable | Rôle | Exemple |
 |----------|------|---------|
 | `PICO_ROUTER_HOST` | Merlin — SSH deploy + HTTP metrics | `192.168.50.1` |
-| `PICO_MERLIN_HOST` | Pico W — ping / cible Wi‑Fi | `192.168.52.4` |
+| `PICO_MERLIN_HOST` | Pico W — ping (pas le Pixoo) | `192.168.52.10` |
+| `PIXOO_IP` | Divoom Pixoo — `pixoo_bridge` | `192.168.52.4` |
 | `firmware/config.py` → `ROUTER_HOST` | IP Merlin vue depuis le Pico | `192.168.50.1` |
 
-Ne pas mettre l’IP du Pico dans `ROUTER_HOST` (le Pico ne sert pas `/metrics.json`).
+Ne pas mettre l’IP du Pico dans `ROUTER_HOST`. Si `192.168.52.4` répond à l’API Pixoo, c’est `PIXOO_IP`, pas un Pico.
 
 `/jffs/addons/pico_monitor` est préféré à `/opt` (survit à une réinstall Entware).
 
@@ -27,12 +34,20 @@ Ne pas mettre l’IP du Pico dans `ROUTER_HOST` (le Pico ne sert pas `/metrics.j
 ```
 pico_monitor/
 ├── deploy_monitor.sh      # menu ↑/↓ + auto|install|pilot|start|stop|cron-*
-├── preview.py             # rendu Mac des écrans → previews/*.png
-├── firmware/              # à flasher sur le Pico W
+├── preview.py             # rendu Mac des écrans OLED → previews/*.png
+├── pixoo_bridge/          # Merlin → Pixoo 64 (HTTP RGB) — si vous avez un Pixoo
+├── firmware/              # à flasher sur le Pico W (+ SSD1306)
 └── merlin/                # déployé sur le routeur
     ├── metrics_server.py run.sh watchdog.sh
     ├── install.sh uninstall.sh
     └── config.example.env
+```
+
+### Pixoo (écran 64×64 couleur)
+
+```bash
+./pixoo_bridge/run.sh --demo     # image immédiate
+./pixoo_bridge/run.sh            # live depuis :8088/metrics.json
 ```
 
 ## Déployer le serveur métriques (Merlin)
@@ -64,7 +79,8 @@ CLI : `install|uninstall|status|upload|test|flash|auto|pilot|start|stop|cron-on|
 
 ```
 PICO_ROUTER_HOST=192.168.50.1
-PICO_MERLIN_HOST=192.168.52.4
+PICO_MERLIN_HOST=192.168.52.10   # Pico W (pas le Pixoo)
+PIXOO_IP=192.168.52.4            # Divoom Pixoo → pixoo_bridge
 ```
 
 Test metrics (Merlin) :
@@ -82,10 +98,10 @@ Via le menu (**Flash Pico firmware**) / `./deploy_monitor.sh flash` : tente `mpr
    - `ROUTER_HOST=192.168.50.1`  ← Merlin, pas l’IP du Pico
    - `ROUTER_PORT=8088`
    - `DEMO=0` (`1` = UI sans réseau)
-3. Soft-reset → bannières `PICO BOOT` / `WIFI OK|FAIL` / `ROUTER OFFLINE` si pas de metrics.
-4. IP LAN attendue du Pico : **192.168.52.4** (`PICO_MERLIN_HOST`) — utile pour `ping` depuis le Mac.
+3. Soft-reset → damier + `BOOT` **avant** le Wi‑Fi, puis `WIFI OK|FAIL` / `ROUTER OFFLINE`.
+4. IP LAN du Pico : `PICO_MERLIN_HOST` (souvent **autre** que le Pixoo `192.168.52.4`).
 
-Broches I2C : SCL=GP5, SDA=GP4, addr `0x3C`.
+Broches I2C : SCL=GP5, SDA=GP4, addr `0x3C` (fallback SoftI2C + `0x3D`).
 
 ### Preview sans hardware
 
