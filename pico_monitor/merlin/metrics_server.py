@@ -117,24 +117,85 @@ def _temp_cpu() -> float:
         return 0.0
 
 
+def _parse_phy_temp(out: str) -> float | None:
+    """Parse `wl phy_tempsense` first token → °C."""
+    if not out:
+        return None
+    try:
+        num = int(out.split()[0], 0)
+        # Broadcom often reports 2×°C when value is large
+        return float(num // 2) if num > 100 else float(num)
+    except (ValueError, IndexError):
+        return None
+
+
+def _wl_band(iface: str) -> str | None:
+    """Return '2g', '5g', or None if iface is not a usable radio.
+
+    Never classify by substring in the iface name (eth5 ≠ 5 GHz).
+    Prefer chanspec / status channel; fall back to Merlin nvram wl*_ifname.
+    """
+    chanspec = _run(f"wl -i {iface} chanspec 2>/dev/null")
+    low = chanspec.lower()
+    if chanspec:
+        if any(tok in low for tok in ("6g", "6ghz", "6/")):
+            return "5g"  # treat 6 GHz as high-band cell on TMP
+        if any(tok in low for tok in ("5g", "5ghz", "/80", "/160", "he5", "vht")):
+            return "5g"
+        # channel number: 2.4 GHz is 1–14; 5/6 GHz use higher channels
+        m = re.search(r"(?:^|[^0-9])([0-9]{1,3})(?:[^0-9]|$)", chanspec)
+        if m:
+            ch = int(m.group(1))
+            if 1 <= ch <= 14:
+                return "2g"
+            if ch >= 36:
+                return "5g"
+
+    status = _run(f"wl -i {iface} status 2>/dev/null")
+    if status:
+        sm = re.search(r"Channel\s*[:=]?\s*([0-9]+)", status, re.I)
+        if sm:
+            ch = int(sm.group(1))
+            if 1 <= ch <= 14:
+                return "2g"
+            if ch >= 36:
+                return "5g"
+        if re.search(r"5\.?\s*GHz|5GHz|band\s*:\s*5", status, re.I):
+            return "5g"
+        if re.search(r"2\.4\s*GHz|2GHz|band\s*:\s*2", status, re.I):
+            return "2g"
+
+    # Merlin nvram: wl0 ≈ 2.4, wl1 ≈ 5, wl2 ≈ 5/6 on tri-band
+    for unit, band in (("0", "2g"), ("1", "5g"), ("2", "5g")):
+        ifname = _nvram(f"wl{unit}_ifname")
+        if ifname and ifname == iface:
+            return band
+    return None
+
+
 def _wl_temps() -> tuple[float, float]:
+    """Return (temp_2g, temp_5g) using real band detection per iface."""
     t2 = t5 = 0.0
-    for iface in ("eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7", "wl0", "wl1"):
+    mapped: list[str] = []
+    ifaces = ("eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7", "wl0", "wl1", "wl2")
+    for iface in ifaces:
         out = _run(f"wl -i {iface} phy_tempsense 2>/dev/null")
-        if not out:
+        c = _parse_phy_temp(out)
+        if c is None:
             continue
-        try:
-            # "0xXX 0xYY" → first number °C/2 or raw
-            num = int(out.split()[0], 0)
-            c = num // 2 if num > 100 else float(num)
-        except (ValueError, IndexError):
+        band = _wl_band(iface)
+        if band is None:
             continue
-        if "5" in iface or iface in ("eth2", "eth3", "wl1"):
+        mapped.append(f"{iface}={band}:{c:.0f}")
+        if band == "5g":
             if t5 == 0:
                 t5 = c
-        else:
+        elif band == "2g":
             if t2 == 0:
                 t2 = c
+    if mapped:
+        # One-line debug hint in stderr-less env: stash on last payload via side channel
+        _last["wl_temp_map"] = ",".join(mapped)
     return t2, t5
 
 
@@ -276,6 +337,7 @@ def collect() -> dict:
         "temp_cpu": int(round(_temp_cpu())),
         "temp_2g": int(round(t2)),
         "temp_5g": int(round(t5)),
+        "temp_bands": _last.get("wl_temp_map", ""),
         "vpn1": vpn1,
         "vpn2": vpn2,
         "jffs": {"used": jffs_pct, "total": 100, "present": jffs_ok},
