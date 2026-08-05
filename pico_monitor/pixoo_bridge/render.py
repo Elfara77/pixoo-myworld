@@ -255,15 +255,13 @@ def _temp_tile_color(celsius: float) -> tuple[int, int, int]:
 
 
 def _disk_tile_color(used_pct: float) -> tuple[int, int, int]:
-    """Disk % used: cyan plenty free, green ok, yellow fill, red critical."""
+    """Disk % used for pies/labels: green low, yellow medium, red high."""
     p = float(used_pct or 0)
-    if p >= 90:
+    if p >= CRIT_DISK:
         return RED
-    if p >= 75:
+    if p >= WARN_DISK:
         return YELLOW
-    if p >= 50:
-        return GREEN
-    return CYAN
+    return GREEN
 
 
 def _level_color(pct: float, *, kind: str = "load") -> tuple[int, int, int]:
@@ -320,7 +318,7 @@ def _is_crit_temp_tile(val: int) -> bool:
 
 
 def _is_crit_disk_tile(pct: float) -> bool:
-    return float(pct or 0) >= 90
+    return float(pct or 0) >= CRIT_DISK
 
 
 def _is_crit_temp(label: str, val: int) -> bool:
