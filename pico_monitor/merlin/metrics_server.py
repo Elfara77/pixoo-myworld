@@ -33,6 +33,7 @@ _hist_lan_down: list[float] = []
 _hist_lan_up: list[float] = []
 _prev_wifi = None  # (ts, rx, tx)
 _prev_lan = None
+_prev_br = None
 _prev_sta: dict[str, tuple[float, int, int]] = {}
 
 
@@ -79,31 +80,42 @@ def _sum_ifaces_bytes(ifaces: list[str]) -> tuple[int, int]:
 
 
 def _wifi_lan_ifaces() -> tuple[list[str], list[str]]:
-    """Return (wifi_ifaces, wired_lan_ifaces) for traffic accounting."""
+    """Return (wifi_ifaces wl*, wired_lan physical ports — not br0)."""
     wan = _wan_iface()
     wifi: list[str] = []
-    for iface in (
-        "eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7",
-        "wl0", "wl1", "wl2", "wl0.1", "wl0.2", "wl1.1", "wl1.2", "wl2.1",
-    ):
-        if not Path(f"/sys/class/net/{iface}").is_dir():
-            continue
-        if _wl_band(iface) or iface.startswith("wl"):
-            wifi.append(iface)
+    net = Path("/sys/class/net")
+    if net.is_dir():
+        for p in sorted(net.iterdir()):
+            name = p.name
+            if name.startswith("wl"):
+                wifi.append(name)
     wifi_set = set(wifi)
-    lan: list[str] = []
-    for iface in ("lan1", "lan2", "lan3", "lan4", "br0"):
+    wired: list[str] = []
+    for iface in ("lan1", "lan2", "lan3", "lan4", "eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7"):
         if iface == wan or iface in wifi_set:
             continue
         if Path(f"/sys/class/net/{iface}").is_dir():
-            lan.append(iface)
-    if not lan:
-        for iface in ("eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7"):
-            if iface == wan or iface in wifi_set:
-                continue
-            if Path(f"/sys/class/net/{iface}").is_dir():
-                lan.append(iface)
-    return wifi, lan
+            wired.append(iface)
+    return wifi, wired
+
+
+def _wired_rates(
+    now: float,
+    wifi_down: float,
+    wifi_up: float,
+    wired_ifaces: list[str],
+) -> tuple[float, float, tuple[float, int, int] | None]:
+    """Mbps to/from wired clients; br0 minus WiFi when ports have no counters."""
+    global _prev_lan, _prev_br
+    if wired_ifaces:
+        rx, tx = _sum_ifaces_bytes(wired_ifaces)
+        down, up, _prev_lan = _rate_from_prev(_prev_lan, now, rx, tx)
+        return down, up, _prev_lan
+    if Path("/sys/class/net/br0").is_dir():
+        rx, tx = _sum_ifaces_bytes(["br0"])
+        br_down, br_up, _prev_br = _rate_from_prev(_prev_br, now, rx, tx)
+        return max(0.0, br_down - wifi_down), max(0.0, br_up - wifi_up), _prev_br
+    return 0.0, 0.0, _prev_lan
 
 
 def _rate_from_prev(
@@ -531,7 +543,7 @@ def collect() -> dict:
     global _prev_net, _hist_down, _hist_up
     global _hist_cpu, _hist_temp
     global _hist_wifi_down, _hist_wifi_up, _hist_lan_down, _hist_lan_up
-    global _prev_wifi, _prev_lan
+    global _prev_wifi, _prev_lan, _prev_br
     now = time.time()
     if now - _last["ts"] < SAMPLE_MIN_S and _last["payload"]:
         return _last["payload"]
@@ -564,11 +576,10 @@ def collect() -> dict:
     _hist_cpu = _hist_cpu[-HISTORY_LEN:]
     _hist_temp = _hist_temp[-HISTORY_LEN:]
 
-    wifi_ifaces, lan_ifaces = _wifi_lan_ifaces()
+    wifi_ifaces, wired_ifaces = _wifi_lan_ifaces()
     wrx, wtx = _sum_ifaces_bytes(wifi_ifaces)
-    lrx, ltx = _sum_ifaces_bytes(lan_ifaces)
     wifi_down, wifi_up, _prev_wifi = _rate_from_prev(_prev_wifi, now, wrx, wtx)
-    lan_down, lan_up, _prev_lan = _rate_from_prev(_prev_lan, now, lrx, ltx)
+    lan_down, lan_up, _ = _wired_rates(now, wifi_down, wifi_up, wired_ifaces)
     _hist_wifi_down.append(wifi_down)
     _hist_wifi_up.append(wifi_up)
     _hist_lan_down.append(lan_down)

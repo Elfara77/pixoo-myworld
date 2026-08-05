@@ -41,11 +41,11 @@ SCREEN_TITLES = {
     "LOD": "Load",
     "TMP": "Temps",
     "GRP": "Traffic",
-    "WLC": "WiFi/LAN",
+    "WLC": "WiFi/Eth",
     "TOP": "Top",
     "CLI": "Clients",
     "NET": "Ports",
-    "PIE": "Disk",
+    "PIE": "Disks",
     "SRV": "Services",
     "SUM": "Summary",
 }
@@ -233,9 +233,37 @@ def _temp_avg(m: dict[str, Any]) -> int:
     return int(round(sum(vals) / len(vals))) if vals else 0
 
 
+def _temp_tile_color(celsius: float) -> tuple[int, int, int]:
+    """Temps screen: green <55, yellow 55–60, red >60."""
+    t = float(celsius or 0)
+    if t <= 0:
+        return DIM
+    if t > 60:
+        return RED
+    if t >= 55:
+        return YELLOW
+    return GREEN
+
+
+def _disk_tile_color(used_pct: float) -> tuple[int, int, int]:
+    """Disk % used: cyan plenty free, green ok, yellow fill, red critical."""
+    p = float(used_pct or 0)
+    if p >= 90:
+        return RED
+    if p >= 75:
+        return YELLOW
+    if p >= 50:
+        return GREEN
+    return CYAN
+
+
 def _level_color(pct: float, *, kind: str = "load") -> tuple[int, int, int]:
     """green=ok, yellow=warn, orange=elevated, red=risky."""
     p = float(pct or 0)
+    if kind == "temp_tile":
+        return _temp_tile_color(p)
+    if kind == "disk_tile":
+        return _disk_tile_color(p)
     if kind == "temp_cpu":
         if p >= CRIT_TEMP_CPU:
             return RED
@@ -278,6 +306,14 @@ def _is_crit_disk(pct: float) -> bool:
     return float(pct or 0) >= CRIT_DISK
 
 
+def _is_crit_temp_tile(val: int) -> bool:
+    return int(val) > 60
+
+
+def _is_crit_disk_tile(pct: float) -> bool:
+    return float(pct or 0) >= 90
+
+
 def _is_crit_temp(label: str, val: int) -> bool:
     if label == "CPU":
         return val >= CRIT_TEMP_CPU
@@ -295,11 +331,17 @@ def _draw_val_unit(
     val_color: Sequence[int],
     *,
     size: str = "normal",
+    unit_size: str | None = None,
+    value_role: str = "value",
     alert: bool = False,
 ) -> int:
-    x = _txt(img, x, y, num, val_color, size=size, role="value", alert=alert)
+    x = _txt(img, x, y, num, val_color, size=size, role=value_role, alert=alert)
     if unit:
-        x = _txt(img, x + 1, y + (0 if size != "big" else 2), unit, UNIT, size="tiny", role="unit")
+        us = unit_size or ("tiny" if size not in ("big", "normal") else "normal")
+        y_off = 0 if size != "big" else 2
+        if us == "tiny" and size == "normal":
+            y_off = 1
+        x = _txt(img, x + 1, y + y_off, unit, UNIT, size=us, role="unit")
     return x
 
 
@@ -389,12 +431,12 @@ def _demo_metrics() -> dict[str, Any]:
         "temp_avg": 52,
         "wifi_down": round(down * 0.7, 2),
         "wifi_up": round(up * 0.6, 2),
-        "lan_down": round(down * 0.3, 2),
-        "lan_up": round(up * 0.4, 2),
-        "wifi_history_down": [x * 0.7 for x in hist_d],
+        "lan_down": round(down * 0.25, 2),
+        "lan_up": round(up * 0.35, 2),
+        "wifi_history_down": [x * 0.7 + 2 * abs(math.sin((t - i) / 7)) for i, x in enumerate(hist_d)],
         "wifi_history_up": [x * 0.6 for x in hist_u],
-        "lan_history_down": [x * 0.3 for x in hist_d],
-        "lan_history_up": [x * 0.4 for x in hist_u],
+        "lan_history_down": [x * 0.2 + 5 * abs(math.sin((t - i) / 5)) for i, x in enumerate(hist_d)],
+        "lan_history_up": [x * 0.35 for x in hist_u],
         "top_down": [["phone45", 125.0], ["living-tv", 42.0]],
         "top_up": [["nas-box", 18.0], ["cam-front", 7.0]],
         "temp_cpu": int(55 + 15 * abs(math.sin(t / 19))),
@@ -603,8 +645,8 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
     _header(img, d, SCREEN_TITLES.get(sid, sid), idx)
 
     if sid == "SYS":
-        _txt(img, 2, 11, "up", LABEL, size="tiny", role="label")
-        _txt(img, 14, 11, str(m.get("uptime_str", "--"))[:8], FG, size="tiny", role="value")
+        _txt(img, 2, 11, "Uptime", LABEL, size="tiny", role="label")
+        _txt(img, 26, 11, str(m.get("uptime_str", "--"))[:7], FG, size="tiny", role="value")
         online = bool(m.get("wan_online"))
         if online or not _ALERT_BLINK or _blink_on():
             d.ellipse([56, 11, 61, 16], fill=GREEN if online else RED)
@@ -649,18 +691,29 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         # Top: CPU | AVG — Bottom: 2G | 5G
         avg = int(m.get("temp_avg", 0) or _temp_avg(m))
         cells = [
-            (0, 11, "CPU", int(m.get("temp_cpu", 0) or 0), "temp_cpu"),
-            (32, 11, "AVG", avg, "temp"),
-            (0, 37, "2G", int(m.get("temp_2g", 0) or 0), "temp"),
-            (32, 37, "5G", int(m.get("temp_5g", 0) or 0), "temp"),
+            (0, 11, "CPU", int(m.get("temp_cpu", 0) or 0)),
+            (32, 11, "AVG", avg),
+            (0, 37, "2G", int(m.get("temp_2g", 0) or 0)),
+            (32, 37, "5G", int(m.get("temp_5g", 0) or 0)),
         ]
-        for x, y, label, val, kind in cells:
-            hot = _is_crit_temp(label if label != "AVG" else "TMP", val)
-            col = _level_color(val, kind=kind)
+        for x, y, label, val in cells:
+            hot = _is_crit_temp_tile(val)
+            col = _temp_tile_color(val)
             outline = RED if (hot and (not _ALERT_BLINK or _blink_on())) else DIM
             d.rectangle([x, y, x + 31, y + 24], outline=outline)
             _txt(img, x + 2, y + 2, label, LABEL, size="tiny", role="label", alert=hot)
-            _draw_val_unit(img, x + 2, y + 11, str(val), "°C", col, size="normal", alert=hot)
+            _draw_val_unit(
+                img,
+                x + 2,
+                y + 10,
+                str(val),
+                "°C",
+                col,
+                size="normal",
+                unit_size="normal",
+                value_role="status",
+                alert=hot,
+            )
 
     elif sid == "GRP":
         down = list(m.get("wan_history_down") or [])
@@ -676,7 +729,7 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
 
     elif sid == "WLC":
         w_down = list(m.get("wifi_history_down") or [])
-        l_down = list(m.get("lan_history_down") or [])
+        eth_down = list(m.get("lan_history_down") or [])
         _txt(img, 2, 11, "WiFi", LABEL, size="tiny", role="label")
         dn, du = _split_rate(m.get("wifi_down", 0))
         x = _draw_val_unit(img, 20, 11, dn, du, GRAPH_DOWN, size="tiny")
@@ -684,13 +737,13 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         un, uu = _split_rate(m.get("wifi_up", 0))
         _draw_val_unit(img, min(x + 12, 48), 11, un, uu, GRAPH_UP, size="tiny")
         _graph(img, d, 1, 18, 62, 18, w_down, GRAPH_DOWN, filled=True)
-        _txt(img, 2, 38, "LAN", LABEL, size="tiny", role="label")
+        _txt(img, 2, 38, "Eth", LABEL, size="tiny", role="label")
         dn, du = _split_rate(m.get("lan_down", 0))
-        x = _draw_val_unit(img, 18, 38, dn, du, GRAPH_UP, size="tiny")
+        x = _draw_val_unit(img, 18, 38, dn, du, ORANGE, size="tiny")
         _txt(img, min(x + 2, 40), 38, "Up", LABEL, size="tiny", role="label")
         un, uu = _split_rate(m.get("lan_up", 0))
-        _draw_val_unit(img, min(x + 12, 48), 38, un, uu, ORANGE, size="tiny")
-        _graph(img, d, 1, 45, 62, 17, l_down, GRAPH_UP, filled=False)
+        _draw_val_unit(img, min(x + 12, 48), 38, un, uu, GRAPH_UP, size="tiny")
+        _graph(img, d, 1, 45, 62, 17, eth_down, ORANGE, filled=False)
 
     elif sid == "TOP":
         _txt(img, 2, 11, "Down", LABEL, size="tiny", role="label")
@@ -729,12 +782,12 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         _txt(img, 18, 11, str(total), FG, size="normal", role="value")
         _txt(img, 2, 22, "WiFi", LABEL, size="tiny", role="label")
         _txt(img, 22, 22, str(wifi), CYAN, size="tiny", role="value")
-        _txt(img, 34, 22, "LAN", LABEL, size="tiny", role="label")
+        _txt(img, 34, 22, "Eth", LABEL, size="tiny", role="label")
         _txt(img, 50, 22, str(wired), ORANGE, size="tiny", role="value")
         _txt(img, 2, 30, "2G", LABEL, size="tiny", role="label")
-        _txt(img, 14, 30, str(n2), GREEN, size="tiny", role="value")
+        _txt(img, 14, 30, str(n2), (120, 200, 255), size="tiny", role="value")
         _txt(img, 34, 30, "5G", LABEL, size="tiny", role="label")
-        _txt(img, 46, 30, str(n5), YELLOW, size="tiny", role="value")
+        _txt(img, 46, 30, str(n5), (200, 140, 255), size="tiny", role="value")
         d.line([(2, 38), (61, 38)], fill=DIM)
         y = 40
         for row in list(m.get("clients_ssid") or [])[:3]:
@@ -742,8 +795,8 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
                 name, n = str(row.get("ssid", "?")), int(row.get("n", 0))
             except (AttributeError, TypeError, ValueError):
                 continue
-            _txt(img, 2, y, _scroll(name, 8), FG, size="normal", role="value")
-            _txt(img, 52, y + 1, str(n), CYAN, size="tiny", role="value")
+            _txt(img, 2, y, _scroll(name, 9), LABEL, size="tiny", role="label")
+            _txt(img, 52, y, str(n), CYAN, size="normal", role="status")
             y += 8
 
     elif sid == "NET":
@@ -788,18 +841,18 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         u_used = int(usb.get("used", 0) or 0) if usb.get("present") else 0
         c_used = int(cache.get("buffers", 0) or 0)
         _txt(img, 2, 11, "JFFS", LABEL, size="tiny", role="label")
-        _draw_val_unit(img, 22, 11, str(j_used), "%", _level_color(j_used, kind="disk"), size="tiny")
+        _draw_val_unit(img, 22, 11, str(j_used), "%", _disk_tile_color(j_used), size="tiny", value_role="status")
         _txt(img, 36, 11, "USB", LABEL, size="tiny", role="label")
-        _draw_val_unit(img, 52, 11, str(u_used), "%", _level_color(u_used, kind="disk"), size="tiny")
-        j_col = _level_color(j_used, kind="disk")
-        u_col = _level_color(u_used, kind="disk")
-        show_j = not (_is_crit_disk(j_used) and _ALERT_BLINK and not _blink_on())
-        show_u = not (_is_crit_disk(u_used) and _ALERT_BLINK and not _blink_on())
+        _draw_val_unit(img, 52, 11, str(u_used), "%", _disk_tile_color(u_used), size="tiny", value_role="status")
+        j_col = _disk_tile_color(j_used)
+        u_col = _disk_tile_color(u_used)
+        show_j = not (_is_crit_disk_tile(j_used) and _ALERT_BLINK and not _blink_on())
+        show_u = not (_is_crit_disk_tile(u_used) and _ALERT_BLINK and not _blink_on())
         pie(16, 30, 10, j_used if show_j else 0, j_col)
         pie(48, 30, 10, u_used if show_u else 0, u_col)
         _txt(img, 2, 44, "CACHE", LABEL, size="tiny", role="label")
-        _draw_val_unit(img, 28, 44, str(c_used), "%", _level_color(c_used, kind="disk"), size="tiny")
-        pie(48, 54, 7, c_used, _level_color(c_used, kind="disk"))
+        _draw_val_unit(img, 28, 44, str(c_used), "%", _disk_tile_color(c_used), size="tiny", value_role="status")
+        pie(48, 54, 7, c_used, _disk_tile_color(c_used))
 
     elif sid == "SRV":
         y = 11

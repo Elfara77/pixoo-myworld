@@ -432,7 +432,7 @@ ALL_PIXOO_SCREEN_LABELS=(
   "TOP Top clients"
   "CLI Clients"
   "NET Ports"
-  "PIE Disk"
+  "PIE Disks"
   "SRV Services"
 )
 # Optional (not in "all") — pick explicitly or all,SUM
