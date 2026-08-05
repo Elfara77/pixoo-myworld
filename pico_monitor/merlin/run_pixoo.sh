@@ -54,5 +54,6 @@ exec "${PYTHON}" -m pixoo_bridge \
   --alert-blink "${PIXOO_ALERT_BLINK:-1}" \
   --blink-period "${PIXOO_BLINK_PERIOD:-0.55}" \
   --rate-style "${PIXOO_RATE_STYLE:-short}" \
+  --screens "${PIXOO_SCREENS:-all}" \
   --log "${LOG}" \
   "$@"

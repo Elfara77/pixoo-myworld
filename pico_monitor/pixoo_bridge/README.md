@@ -43,10 +43,9 @@ cd pico_monitor
 | `PIXOO_SCREEN_SECONDS` / `--screen-seconds` | `8` | Temps d’affichage par écran (rotation) |
 | `PIXOO_FRAME_INTERVAL` / `--frame-interval` | `1.05` | Intervalle minimum entre pushes HTTP |
 | `PIXOO_BRIGHTNESS` / `--brightness` | `50` | Luminosité Pixoo 0–100 |
+| `PIXOO_SCREENS` / `--screens` | `all` | `all` ou liste `SYS,GRP,TOP,TMP,PIE,SRV,NET,CLI` (≥1). Points bannière = nb écrans si >1. |
 
-Assistant interactif : `./deploy_monitor.sh visual` (aussi après `auto`, et entrée menu).
-
-Screens (7): System, Traffic, Top, Temps, Disk Space, Services, Ports. Pixel fonts 5×7 (no antialias).
+Assistant : `./deploy_monitor.sh visual` · sélection écrans : menu / pilotage / `./deploy_monitor.sh screens`.
 
 ## Probe
 

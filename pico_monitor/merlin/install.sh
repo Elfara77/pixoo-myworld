@@ -38,6 +38,7 @@ PIXOO_TEXT_SCROLL="${PIXOO_TEXT_SCROLL:-1}"
 PIXOO_ALERT_BLINK="${PIXOO_ALERT_BLINK:-1}"
 PIXOO_BLINK_PERIOD="${PIXOO_BLINK_PERIOD:-0.55}"
 PIXOO_RATE_STYLE="${PIXOO_RATE_STYLE:-short}"
+PIXOO_SCREENS="${PIXOO_SCREENS:-all}"
 
 echo "==> pico_monitor install → ${ROOT}"
 
@@ -91,6 +92,7 @@ _set_kv PIXOO_TEXT_SCROLL "${PIXOO_TEXT_SCROLL}"
 _set_kv PIXOO_ALERT_BLINK "${PIXOO_ALERT_BLINK}"
 _set_kv PIXOO_BLINK_PERIOD "${PIXOO_BLINK_PERIOD}"
 _set_kv PIXOO_RATE_STYLE "${PIXOO_RATE_STYLE}"
+_set_kv PIXOO_SCREENS "${PIXOO_SCREENS}"
 _set_kv PIXOO_METRICS_URL "http://127.0.0.1:${METRICS_PORT}/metrics.json"
 
 chmod 755 "${ROOT}/run.sh" "${ROOT}/watchdog.sh" "${ROOT}/install.sh" "${ROOT}/uninstall.sh" 2>/dev/null || true

@@ -200,14 +200,95 @@ def _wl_temps() -> tuple[float, float]:
 
 
 def _clients() -> tuple[int, int]:
-    wifi = 0
-    for iface in ("eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7", "wl0", "wl1"):
-        out = _run(f"wl -i {iface} assoclist 2>/dev/null")
-        wifi += len(re.findall(r"(?i)assoclist\s+([0-9a-f:]{17})", out))
-    # online estimate from arp
-    arp = Path("/proc/net/arp").read_text() if Path("/proc/net/arp").is_file() else ""
-    total = max(wifi, len(re.findall(r"0x2\s+", arp)))
-    return total, wifi
+    detail = _clients_detail()
+    return int(detail["total"]), int(detail["wifi"])
+
+
+def _iface_ssid_map() -> dict[str, str]:
+    """Map wl interface → SSID (including guest virtual ifaces)."""
+    out: dict[str, str] = {}
+    for unit in range(0, 4):
+        ifname = _nvram(f"wl{unit}_ifname")
+        ssid = _nvram(f"wl{unit}_ssid") or f"wl{unit}"
+        if ifname:
+            out[ifname] = ssid[:12]
+        for g in range(1, 4):
+            gif = _nvram(f"wl{unit}.{g}_ifname")
+            gssid = _nvram(f"wl{unit}.{g}_ssid")
+            if gif and gssid:
+                out[gif] = gssid[:12]
+            # Merlin sometimes uses wlX.Y without separate ifname
+            virt = f"wl{unit}.{g}"
+            if gssid and virt not in out:
+                out[virt] = gssid[:12]
+    return out
+
+
+def _clients_detail() -> dict:
+    """Active clients: total, wifi, wired, by band (2g/5g), top SSIDs."""
+    wifi_macs: set[str] = set()
+    wifi_2g = wifi_5g = 0
+    by_ssid: dict[str, int] = {}
+    ssid_map = _iface_ssid_map()
+    ifaces = (
+        "eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7",
+        "wl0", "wl1", "wl2", "wl0.1", "wl0.2", "wl1.1", "wl1.2", "wl2.1",
+    )
+    for iface in ifaces:
+        assoc = _run(f"wl -i {iface} assoclist 2>/dev/null")
+        macs = re.findall(r"(?i)assoclist\s+([0-9a-f:]{17})", assoc)
+        if not macs:
+            continue
+        band = _wl_band(iface)
+        if not band:
+            parent = iface.split(".")[0]
+            if parent != iface:
+                band = _wl_band(parent)
+        band = band or "2g"
+        ssid = ssid_map.get(iface) or ssid_map.get(iface.split(".")[0], iface[:8])
+        for mac in macs:
+            ml = mac.lower()
+            if ml in wifi_macs:
+                continue
+            wifi_macs.add(ml)
+            if band == "5g":
+                wifi_5g += 1
+            else:
+                wifi_2g += 1
+            by_ssid[ssid] = by_ssid.get(ssid, 0) + 1
+
+    # Wired ≈ ARP entries that are not Wi‑Fi STAs
+    arp_macs: set[str] = set()
+    try:
+        for line in Path("/proc/net/arp").read_text().splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 4 and parts[2] == "0x2":
+                arp_macs.add(parts[3].lower())
+    except OSError:
+        pass
+    wired = max(0, len(arp_macs - wifi_macs))
+    # Prefer DHCP lease count for wired if larger signal
+    lease_n = 0
+    for path in ("/var/lib/misc/dnsmasq.leases", "/tmp/var/lib/misc/dnsmasq.leases"):
+        try:
+            lease_n = len(Path(path).read_text().splitlines())
+            break
+        except OSError:
+            continue
+    if lease_n > 0:
+        wired = max(wired, max(0, lease_n - len(wifi_macs)))
+
+    wifi = len(wifi_macs)
+    total = wifi + wired
+    ssid_list = sorted(by_ssid.items(), key=lambda x: x[1], reverse=True)[:4]
+    return {
+        "total": total,
+        "wifi": wifi,
+        "wired": wired,
+        "wifi_2g": wifi_2g,
+        "wifi_5g": wifi_5g,
+        "by_ssid": [{"ssid": s, "n": n} for s, n in ssid_list],
+    }
 
 
 def _df_pct(path: str) -> tuple[int, bool]:
@@ -403,7 +484,8 @@ def collect() -> dict:
 
     ram_pct, buff_pct, cached_pct = _mem()
     t2, t5 = _wl_temps()
-    total, wifi = _clients()
+    cdetail = _clients_detail()
+    total, wifi = int(cdetail["total"]), int(cdetail["wifi"])
     jffs_pct, jffs_ok = _df_pct("/jffs")
     usb_pct, usb_ok = _usb_pct()
     usb2, usb3 = _usb_ports()
@@ -420,6 +502,10 @@ def collect() -> dict:
         "ram": int(round(ram_pct)),
         "clients": total,
         "clients_wifi": wifi,
+        "clients_wired": int(cdetail["wired"]),
+        "clients_2g": int(cdetail["wifi_2g"]),
+        "clients_5g": int(cdetail["wifi_5g"]),
+        "clients_ssid": cdetail["by_ssid"],
         "wan_online": online,
         "wan_down": round(down_mbps, 2),
         "wan_up": round(up_mbps, 2),

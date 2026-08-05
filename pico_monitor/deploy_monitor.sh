@@ -51,6 +51,7 @@ PIXOO_TEXT_SCROLL="${PIXOO_TEXT_SCROLL:-1}"
 PIXOO_ALERT_BLINK="${PIXOO_ALERT_BLINK:-1}"
 PIXOO_BLINK_PERIOD="${PIXOO_BLINK_PERIOD:-0.55}"
 PIXOO_RATE_STYLE="${PIXOO_RATE_STYLE:-short}"
+PIXOO_SCREENS="${PIXOO_SCREENS:-all}"
 
 REMOTE_PATH_ENV='export PATH=/opt/bin:/opt/sbin:/opt/usr/bin:/bin:/sbin:/usr/bin:/usr/sbin'
 
@@ -113,6 +114,7 @@ load_config() {
       PIXOO_ALERT_BLINK="${PIXOO_ALERT_BLINK:-1}"
       PIXOO_BLINK_PERIOD="${PIXOO_BLINK_PERIOD:-0.55}"
       PIXOO_RATE_STYLE="${PIXOO_RATE_STYLE:-short}"
+      PIXOO_SCREENS="${PIXOO_SCREENS:-all}"
       break
     fi
   done
@@ -139,6 +141,7 @@ PIXOO_TEXT_SCROLL=${PIXOO_TEXT_SCROLL}
 PIXOO_ALERT_BLINK=${PIXOO_ALERT_BLINK}
 PIXOO_BLINK_PERIOD=${PIXOO_BLINK_PERIOD}
 PIXOO_RATE_STYLE=${PIXOO_RATE_STYLE}
+PIXOO_SCREENS=${PIXOO_SCREENS}
 EOF
   cp -f "${CFG_PROJECT}" "${CFG_HOME}"
   echo "Saved ${CFG_PROJECT} and ${CFG_HOME}"
@@ -414,9 +417,27 @@ visual_defaults() {
   PIXOO_SCREEN_SECONDS="8"
   PIXOO_FRAME_INTERVAL="1.05"
   PIXOO_RATE_STYLE="short"
+  PIXOO_SCREENS="all"
 }
 
+# Canonical screen ids (must match pixoo_bridge.render.ALL_SCREEN_IDS)
+ALL_PIXOO_SCREENS=(SYS GRP TOP TMP PIE SRV NET CLI)
+ALL_PIXOO_SCREEN_LABELS=(
+  "SYS System"
+  "GRP Traffic"
+  "TOP Top"
+  "TMP Temps"
+  "PIE Disk Space"
+  "SRV Services"
+  "NET Ports"
+  "CLI Clients"
+)
+
 print_visual_profile() {
+  local nscr="${PIXOO_SCREENS}"
+  if [[ "${nscr}" == "all" || -z "${nscr}" ]]; then
+    nscr="all (${#ALL_PIXOO_SCREENS[@]})"
+  fi
   cat <<EOF
   ┌─ Profil visuel Pixoo ─────────────────────
   │  Couleur texte     : ${PIXOO_COLOR_MODE}   (mono|poly)
@@ -424,9 +445,10 @@ print_visual_profile() {
   │  Alert blink       : ${PIXOO_ALERT_BLINK}      (1=on 0=off)
   │  Période blink     : ${PIXOO_BLINK_PERIOD}s
   │  Luminosité        : ${PIXOO_BRIGHTNESS}     (0–100)
-  │  Temps par écran   : ${PIXOO_SCREEN_SECONDS}s  (rotation des 7 écrans)
+  │  Temps par écran   : ${PIXOO_SCREEN_SECONDS}s  (rotation)
   │  Rafraîchissement  : ${PIXOO_FRAME_INTERVAL}s  (push HTTP frame)
   │  Unités débit      : ${PIXOO_RATE_STYLE}  (short=K/M/G · long=Kb/s)
+  │  Écrans actifs     : ${nscr}
   └───────────────────────────────────────────
 EOF
 }
@@ -454,7 +476,7 @@ configure_visual() {
   # Show defaults without clobbering current until accepted
   local _cm="${PIXOO_COLOR_MODE}" _ts="${PIXOO_TEXT_SCROLL}" _ab="${PIXOO_ALERT_BLINK}"
   local _bp="${PIXOO_BLINK_PERIOD}" _br="${PIXOO_BRIGHTNESS}" _ss="${PIXOO_SCREEN_SECONDS}"
-  local _fi="${PIXOO_FRAME_INTERVAL}" _rs="${PIXOO_RATE_STYLE}"
+  local _fi="${PIXOO_FRAME_INTERVAL}" _rs="${PIXOO_RATE_STYLE}" _sc="${PIXOO_SCREENS}"
   visual_defaults
   print_visual_profile
   # restore current while asking
@@ -466,6 +488,7 @@ configure_visual() {
   PIXOO_SCREEN_SECONDS="${_ss}"
   PIXOO_FRAME_INTERVAL="${_fi}"
   PIXOO_RATE_STYLE="${_rs}"
+  PIXOO_SCREENS="${_sc:-all}"
 
   echo ""
   echo "Profil actuel :"
@@ -505,6 +528,100 @@ configure_visual() {
   PIXOO_SCREEN_SECONDS="$(_ask_choice "Temps par écran (secondes, rotation des écrans)" "${PIXOO_SCREEN_SECONDS}" '^[0-9]+([.][0-9]+)?$')"
   echo "→ temps par écran = ${PIXOO_SCREEN_SECONDS}s"
 
+  echo ""
+  configure_screens
+
+  save_config
+  apply_visual_remote || true
+}
+
+# Interactive screen picker — all or ≥1. Updates PIXOO_SCREENS.
+configure_screens() {
+  echo "╔══════════════════════════════════════════╗"
+  echo "║  Sélection des écrans Pixoo              ║"
+  echo "╚══════════════════════════════════════════╝"
+  echo "  all = tous · au moins 1 requis · points bannière = nb écrans (>1)"
+  echo ""
+
+  local -a on=()
+  local i sid label tok
+  # Seed from current PIXOO_SCREENS
+  if [[ -z "${PIXOO_SCREENS}" || "${PIXOO_SCREENS}" == "all" ]]; then
+    on=("${ALL_PIXOO_SCREENS[@]}")
+  else
+    IFS=',' read -r -a tok <<< "${PIXOO_SCREENS}"
+    for sid in "${tok[@]}"; do
+      sid="$(echo "${sid}" | tr '[:lower:]' '[:upper:]' | tr -d ' ')"
+      [[ -n "${sid}" ]] && on+=("${sid}")
+    done
+  fi
+
+  _screen_on() {
+    local s="$1" x
+    for x in "${on[@]}"; do [[ "${x}" == "${s}" ]] && return 0; done
+    return 1
+  }
+  _screen_toggle() {
+    local s="$1" tmp=() x
+    if _screen_on "${s}"; then
+      for x in "${on[@]}"; do [[ "${x}" != "${s}" ]] && tmp+=("${x}"); done
+      on=("${tmp[@]}")
+    else
+      on+=("${s}")
+    fi
+  }
+
+  while true; do
+    echo "  Écrans (x = actif) :"
+    for i in "${!ALL_PIXOO_SCREENS[@]}"; do
+      sid="${ALL_PIXOO_SCREENS[$i]}"
+      label="${ALL_PIXOO_SCREEN_LABELS[$i]}"
+      if _screen_on "${sid}"; then
+        printf '   %d) [x] %s\n' "$((i + 1))" "${label}"
+      else
+        printf '   %d) [ ] %s\n' "$((i + 1))" "${label}"
+      fi
+    done
+    echo "   a) tous   n) aucun (puis en choisir ≥1)   d) done"
+    echo ""
+    local c
+    read -r -p "Toggle [1-${#ALL_PIXOO_SCREENS[@]}/a/n/d]: " c
+    c="${c:-d}"
+    case "${c}" in
+      a|A|all)
+        on=("${ALL_PIXOO_SCREENS[@]}")
+        ;;
+      n|N|none)
+        on=()
+        ;;
+      d|D|done|""|q|Q)
+        if (( ${#on[@]} < 1 )); then
+          echo "  ⚠ au moins 1 écran requis."
+          continue
+        fi
+        break
+        ;;
+      *)
+        if [[ "${c}" =~ ^[0-9]+$ ]] && (( c >= 1 && c <= ${#ALL_PIXOO_SCREENS[@]} )); then
+          _screen_toggle "${ALL_PIXOO_SCREENS[$((c - 1))]}"
+        else
+          echo "  ?"
+        fi
+        ;;
+    esac
+    echo ""
+  done
+
+  if (( ${#on[@]} == ${#ALL_PIXOO_SCREENS[@]} )); then
+    PIXOO_SCREENS="all"
+  else
+    PIXOO_SCREENS="$(IFS=,; echo "${on[*]}")"
+  fi
+  echo "→ écrans = ${PIXOO_SCREENS} (${#on[@]} actif(s))"
+}
+
+configure_screens_and_apply() {
+  configure_screens
   save_config
   apply_visual_remote || true
 }
@@ -539,6 +656,7 @@ apply_visual_remote() {
     _set PIXOO_ALERT_BLINK '${PIXOO_ALERT_BLINK}'
     _set PIXOO_BLINK_PERIOD '${PIXOO_BLINK_PERIOD}'
     _set PIXOO_RATE_STYLE '${PIXOO_RATE_STYLE}'
+    _set PIXOO_SCREENS '${PIXOO_SCREENS}'
     echo 'config.env updated'
   "
   if remote "test -x '${REMOTE_PATH}/watchdog.sh'" 2>/dev/null; then
@@ -600,7 +718,7 @@ upload() {
 
 install_remote() {
   echo "==> remote install (opkg python3+pillow + cru + metrics + Pixoo bridge)"
-  remote "PICO_METRICS_PORT=${METRICS_PORT} PIXOO_IP=${PIXOO_IP} PIXOO_BRIGHTNESS=${PIXOO_BRIGHTNESS} PIXOO_SCREEN_SECONDS=${PIXOO_SCREEN_SECONDS} PIXOO_FRAME_INTERVAL=${PIXOO_FRAME_INTERVAL} PIXOO_COLOR_MODE=${PIXOO_COLOR_MODE} PIXOO_TEXT_SCROLL=${PIXOO_TEXT_SCROLL} PIXOO_ALERT_BLINK=${PIXOO_ALERT_BLINK} PIXOO_BLINK_PERIOD=${PIXOO_BLINK_PERIOD} PIXOO_RATE_STYLE=${PIXOO_RATE_STYLE} /bin/sh '${REMOTE_PATH}/install.sh'"
+  remote "PICO_METRICS_PORT=${METRICS_PORT} PIXOO_IP=${PIXOO_IP} PIXOO_BRIGHTNESS=${PIXOO_BRIGHTNESS} PIXOO_SCREEN_SECONDS=${PIXOO_SCREEN_SECONDS} PIXOO_FRAME_INTERVAL=${PIXOO_FRAME_INTERVAL} PIXOO_COLOR_MODE=${PIXOO_COLOR_MODE} PIXOO_TEXT_SCROLL=${PIXOO_TEXT_SCROLL} PIXOO_ALERT_BLINK=${PIXOO_ALERT_BLINK} PIXOO_BLINK_PERIOD=${PIXOO_BLINK_PERIOD} PIXOO_RATE_STYLE=${PIXOO_RATE_STYLE} PIXOO_SCREENS=${PIXOO_SCREENS} /bin/sh '${REMOTE_PATH}/install.sh'"
   echo "Install OK — metrics: http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json"
   echo "           — Pixoo bridge → ${PIXOO_IP} (daemon on Merlin)"
 }
@@ -1043,6 +1161,7 @@ MENU_ITEMS=(
   "Prerequisites / SSH + Pixoo API|check_prereq"
   "Configure hosts (Merlin + Pixoo)|configure_router"
   "Assistant paramétrage visuel|configure_visual"
+  "Sélection écrans Pixoo|configure_screens_and_apply"
   "Upload merlin + pixoo_bridge|upload"
   "Install (opkg + cru + start)|do_install"
   "Pilotage distant|pilotage_menu"
@@ -1062,6 +1181,8 @@ PILOT_MENU_ITEMS=(
   "Stop metrics+bridge|stop_watchdog"
   "Cron ON (cru a PicoMonitor)|cron_on"
   "Cron OFF (cru d PicoMonitor)|cron_off"
+  "Paramétrage visuel|configure_visual"
+  "Sélection écrans|configure_screens_and_apply"
   "État détaillé|pilot_status"
   "Test Pixoo API|ping_pixoo"
   "Test metrics Merlin|test_metrics"
@@ -1226,6 +1347,7 @@ run_menu_action() {
     check_prereq) check_prereq || true ;;
     configure_router) configure_router ;;
     configure_visual) configure_visual ;;
+    configure_screens_and_apply) configure_screens_and_apply ;;
     upload) upload ;;
     do_install) do_install ;;
     flash_pico) flash_pico || true ;;
@@ -1397,11 +1519,12 @@ menu() {
 
 usage() {
   cat <<EOF
-Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash|pilot|start|stop|cron-on|cron-off|logs|visual]
+Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash|pilot|start|stop|cron-on|cron-off|logs|visual|screens]
 
   (no args) / menu   Interactive menu (↑/↓ + ENTER, or numbers)
   auto               Full pipeline + assistant paramétrage visuel
   visual             Assistant paramétrage visuel (mono/poly, blink, refresh…)
+  screens            Sélection des écrans actifs (≥1)
   install            Upload + install + start (metrics + Pixoo bridge on Merlin)
   uninstall          Remove Merlin addon + cru
   status             Live Merlin + Pixoo status
@@ -1429,6 +1552,7 @@ Env / .deploy.env:
   PIXOO_ALERT_BLINK  1|0 blink critical text/gauges (default 1)
   PIXOO_BLINK_PERIOD half-cycle seconds for blink (default 0.55)
   PIXOO_RATE_STYLE   short|long (K/M/G vs Kb/s)
+  PIXOO_SCREENS       all or SYS,GRP,TOP,TMP,PIE,SRV,NET,CLI
 
 Pixoo display: auto install starts pixoo_bridge ON Merlin (Entware).
 Logs: ${REMOTE_PATH:-/jffs/addons/pico_monitor}/logs/pixoo_bridge.log
@@ -1443,6 +1567,7 @@ case "${CMD}" in
   menu) menu ;;
   auto|automatic|auto_mode) auto_mode ;;
   visual|visuel|configure_visual|configure-visual) configure_visual ;;
+  screens|ecrans|configure_screens|configure-screens) configure_screens_and_apply ;;
   install) check_prereq; upload; install_remote ;;
   uninstall) uninstall_remote ;;
   status) status_remote ;;

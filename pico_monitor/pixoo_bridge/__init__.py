@@ -4,12 +4,23 @@ Pixoo ≠ Pico. Firmware under firmware/ is for Pico W + SSD1306 only.
 """
 
 from .client import PixooClient
-from .render import SCREEN_IDS, render_boot_banner, render_screen, set_render_options
+from .render import (
+    ALL_SCREEN_IDS,
+    SCREEN_IDS,
+    get_screen_ids,
+    render_boot_banner,
+    render_screen,
+    set_render_options,
+    set_screens,
+)
 
 __all__ = [
     "PixooClient",
+    "ALL_SCREEN_IDS",
     "SCREEN_IDS",
+    "get_screen_ids",
     "render_boot_banner",
     "render_screen",
     "set_render_options",
+    "set_screens",
 ]

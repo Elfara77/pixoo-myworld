@@ -31,7 +31,7 @@ HEADER_FG = (6, 8, 14)
 # Solid text color in mono mode (no gray nuances)
 TEXT_MONO = (255, 255, 255)
 
-SCREEN_IDS = ("SYS", "GRP", "TOP", "TMP", "PIE", "SRV", "NET")
+ALL_SCREEN_IDS = ("SYS", "GRP", "TOP", "TMP", "PIE", "SRV", "NET", "CLI")
 SCREEN_TITLES = {
     "SYS": "System",
     "GRP": "Traffic",
@@ -40,7 +40,14 @@ SCREEN_TITLES = {
     "PIE": "Disk Space",
     "SRV": "Services",
     "NET": "Ports",
+    "CLI": "Clients",
 }
+
+# Active rotation set (mutable); default = all
+_ACTIVE_SCREENS: list[str] = list(ALL_SCREEN_IDS)
+
+# Back-compat alias updated by set_screens / set_render_options
+SCREEN_IDS: tuple[str, ...] = tuple(_ACTIVE_SCREENS)
 
 _COLOR_MODE = "mono"
 _TEXT_SCROLL = True
@@ -57,6 +64,35 @@ CRIT_DISK = 90.0
 _RATE_STYLE = "short"  # short=K/M/G · long=Kb/s|Mb/s|Gb/s
 
 
+def get_screen_ids() -> tuple[str, ...]:
+    return tuple(_ACTIVE_SCREENS)
+
+
+def set_screens(spec: str | None) -> tuple[str, ...]:
+    """Select active screens. spec='all' or 'SYS,GRP,TMP' (order preserved).
+
+    At least one valid id required; invalid tokens ignored.
+    """
+    global SCREEN_IDS, _ACTIVE_SCREENS
+    if spec is None or not str(spec).strip() or str(spec).strip().lower() in ("all", "*", "default"):
+        _ACTIVE_SCREENS = list(ALL_SCREEN_IDS)
+        SCREEN_IDS = tuple(_ACTIVE_SCREENS)
+        return SCREEN_IDS
+    wanted: list[str] = []
+    for tok in str(spec).replace(";", ",").replace(" ", ",").split(","):
+        sid = tok.strip().upper()
+        if not sid:
+            continue
+        if sid in ALL_SCREEN_IDS and sid not in wanted:
+            wanted.append(sid)
+    if not wanted:
+        _ACTIVE_SCREENS = list(ALL_SCREEN_IDS)
+    else:
+        _ACTIVE_SCREENS = wanted
+    SCREEN_IDS = tuple(_ACTIVE_SCREENS)
+    return SCREEN_IDS
+
+
 def set_render_options(
     *,
     color_mode: str | None = None,
@@ -64,6 +100,7 @@ def set_render_options(
     alert_blink: bool | None = None,
     blink_period_s: float | None = None,
     rate_style: str | None = None,
+    screens: str | None = None,
 ) -> None:
     global _COLOR_MODE, _TEXT_SCROLL, _ALERT_BLINK, _BLINK_PERIOD_S, _RATE_STYLE
     if color_mode is not None:
@@ -83,6 +120,8 @@ def set_render_options(
     if rate_style is not None:
         rs = rate_style.strip().lower()
         _RATE_STYLE = "long" if rs in ("long", "full", "verbose") else "short"
+    if screens is not None:
+        set_screens(screens)
 
 
 def _text_color(color: Sequence[int]) -> tuple[int, int, int]:
@@ -210,18 +249,24 @@ def _gauge_color(pct: float, *, kind: str = "load") -> tuple[int, int, int]:
 
 
 def _header(img, draw: ImageDraw.ImageDraw, title: str, idx: int) -> None:
-    n = len(SCREEN_IDS)
+    screens = get_screen_ids()
+    n = len(screens)
     draw.rectangle([0, 0, 63, 9], fill=HEADER)
-    # Leave room for page dots on the right
-    title_chars = 5 if n >= 7 else 6
+    # More title room when few/no page dots
+    if n <= 1:
+        title_chars = 10
+    elif n >= 6:
+        title_chars = 5
+    else:
+        title_chars = 6
     shown = _scroll(title, title_chars)
     _txt(img, 1, 1, shown, HEADER_FG, size="normal")
-    # Force header title contrast: draw with dark on cyan even in mono
-    # (re-draw pixels with HEADER_FG directly for readability on cyan bar)
     if _COLOR_MODE == "mono":
-        # wipe and redraw title in solid HEADER_FG (not white-on-cyan)
         draw.rectangle([0, 0, 63, 9], fill=HEADER)
         pf.draw_text(img, 1, 1, shown, HEADER_FG, size="normal")
+    # Page dots only when 2+ screens are in rotation
+    if n <= 1:
+        return
     dot0 = 64 - n * 4 - 1
     for i in range(n):
         x = dot0 + i * 4
@@ -315,6 +360,13 @@ def _demo_metrics() -> dict[str, Any]:
         "ram": int(50 + 20 * abs(math.sin(t / 13))),
         "clients": 14,
         "clients_wifi": 10,
+        "clients_wired": 4,
+        "clients_2g": 6,
+        "clients_5g": 4,
+        "clients_ssid": [
+            {"ssid": "Home", "n": 7},
+            {"ssid": "IoT", "n": 3},
+        ],
         "wan_online": True,
         "wan_down": round(down, 2),
         "wan_up": round(up, 2),
@@ -363,8 +415,11 @@ def _active_vpns(m: dict[str, Any]) -> list[tuple[str, str]]:
 
 
 def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
-    idx = idx % len(SCREEN_IDS)
-    sid = SCREEN_IDS[idx]
+    screens = get_screen_ids()
+    if not screens:
+        screens = ALL_SCREEN_IDS
+    idx = idx % len(screens)
+    sid = screens[idx]
     img = Image.new("RGB", (64, 64), BG)
     d = ImageDraw.Draw(img)
     title = SCREEN_TITLES.get(sid, sid)
@@ -512,7 +567,8 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         else:
             _txt(img, 28, y, "off", DIM, size="tiny")
 
-    else:  # NET — LAN ports + Wi‑Fi + USB presence
+    elif sid == "NET":
+        # LAN ports + Wi‑Fi + USB presence
         ports = list(m.get("lan_ports") or [False, False, False, False])
         while len(ports) < 4:
             ports.append(False)
@@ -536,6 +592,36 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         _txt(img, 2, 54, "WAN", DIM, size="tiny", alert=not online)
         if online or not _ALERT_BLINK or _blink_on():
             d.ellipse([22, 54, 28, 60], fill=GREEN if online else RED)
+
+    elif sid == "CLI":
+        # Active clients: totals + band + top SSIDs
+        total = int(m.get("clients", 0) or 0)
+        wifi = int(m.get("clients_wifi", 0) or 0)
+        wired = int(m.get("clients_wired", 0) or max(0, total - wifi))
+        n2 = int(m.get("clients_2g", 0) or 0)
+        n5 = int(m.get("clients_5g", 0) or 0)
+        _txt(img, 2, 11, f"All {total}", FG, size="tiny")
+        _txt(img, 2, 19, f"WiFi {wifi}", CYAN, size="tiny")
+        _txt(img, 34, 19, f"LAN {wired}", ORANGE, size="tiny")
+        _txt(img, 2, 28, f"2G {n2}", GREEN, size="tiny")
+        _txt(img, 34, 28, f"5G {n5}", YELLOW, size="tiny")
+        d.line([(2, 36), (61, 36)], fill=DIM)
+        y = 39
+        ssids = list(m.get("clients_ssid") or [])
+        if not ssids:
+            _txt(img, 2, y, "no SSID", DIM, size="tiny")
+        for row in ssids[:3]:
+            try:
+                name = str(row.get("ssid", "?"))
+                n = int(row.get("n", 0))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            _txt(img, 2, y, _scroll(name, 8), FG, size="tiny")
+            _txt(img, 50, y, str(n), CYAN, size="tiny")
+            y += 8
+
+    else:
+        _txt(img, 2, 20, sid[:8], DIM, size="tiny")
 
     if m.get("_demo") or m.get("_offline"):
         tag = "DEMO" if m.get("_demo") else "OFF"

@@ -31,11 +31,11 @@ if str(_HERE.parent) not in sys.path:
 
 from pixoo_bridge.client import PixooClient
 from pixoo_bridge.render import (
-    SCREEN_IDS,
-    _demo_metrics,
+    get_screen_ids,
     render_boot_banner,
     render_screen,
     set_render_options,
+    _demo_metrics,
 )
 
 LOG = logging.getLogger("pixoo_bridge")
@@ -141,6 +141,11 @@ def main(argv: list[str] | None = None) -> int:
         help="short=K/M/G · long=Kb/s|Mb/s|Gb/s",
     )
     ap.add_argument(
+        "--screens",
+        default=env.get("PIXOO_SCREENS", "all"),
+        help="Active screens: all or comma list SYS,GRP,TOP,TMP,PIE,SRV,NET",
+    )
+    ap.add_argument(
         "--log",
         default=env.get("PIXOO_LOG") or None,
         help="Also write log file (e.g. /jffs/addons/pico_monitor/logs/pixoo_bridge.log)",
@@ -155,11 +160,13 @@ def main(argv: list[str] | None = None) -> int:
         alert_blink=blink_on,
         blink_period_s=args.blink_period,
         rate_style=args.rate_style,
+        screens=args.screens,
     )
+    screens = get_screen_ids()
 
     _setup_logging(args.log)
     LOG.info(
-        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s frame_s=%s color=%s scroll=%s blink=%s rate=%s",
+        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s frame_s=%s color=%s scroll=%s blink=%s rate=%s screens=%s",
         args.pixoo,
         args.metrics,
         args.demo,
@@ -170,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         scroll_on,
         blink_on,
         args.rate_style,
+        ",".join(screens),
     )
 
     client = PixooClient(args.pixoo)
@@ -197,11 +205,15 @@ def main(argv: list[str] | None = None) -> int:
     screen_t0 = time.monotonic()
     metrics_ok = 0
     metrics_fail = 0
-    LOG.info("loop screens=%s ids=%s", len(SCREEN_IDS), ",".join(SCREEN_IDS))
+    screens = get_screen_ids()
+    LOG.info("loop screens=%s ids=%s", len(screens), ",".join(screens))
 
     while True:
         loop_t0 = time.monotonic()
         offline = False
+        screens = get_screen_ids()
+        if not screens:
+            screens = ("SYS",)
         if args.demo:
             m = _demo_metrics()
         else:
@@ -223,19 +235,20 @@ def main(argv: list[str] | None = None) -> int:
                 offline = True
 
         if time.monotonic() - screen_t0 >= max(1.0, args.screen_seconds):
-            screen_i = (screen_i + 1) % len(SCREEN_IDS)
+            screen_i = (screen_i + 1) % len(screens)
             screen_t0 = time.monotonic()
             LOG.info(
                 "screen → %s (%d/%d)%s",
-                SCREEN_IDS[screen_i],
+                screens[screen_i],
                 screen_i + 1,
-                len(SCREEN_IDS),
+                len(screens),
                 " [offline-demo]" if offline else "",
             )
 
+        screen_i = screen_i % len(screens)
         frame = render_screen(m, screen_i)
         if args.preview:
-            frame.save(args.preview / f"{screen_i:02d}_{SCREEN_IDS[screen_i].lower()}.png")
+            frame.save(args.preview / f"{screen_i:02d}_{screens[screen_i].lower()}.png")
         try:
             client.push_image(frame)
         except Exception as exc:

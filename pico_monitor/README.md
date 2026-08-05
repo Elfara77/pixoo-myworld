@@ -37,8 +37,9 @@ cp -n .deploy.env.example .deploy.env   # PIXOO_IP=192.168.52.4
 Après `auto`, le Pixoo doit afficher la bannière puis les 6 écrans.
 Si les métriques sont down, le bridge bascule en **demo** (écran non vide).
 
-Rendu : assistant `./deploy_monitor.sh visual` (aussi après `auto`) pour
-mono/poly, blink, luminosité, refresh, unités. Voir `pixoo_bridge/README.md`.
+Rendu : `./deploy_monitor.sh visual` (après `auto`) — mono/poly, blink, luminosité,
+temps/écran, unités, **sélection d’écrans**. 8 écrans dont **Clients** (Wi‑Fi/LAN/SSID).
+Voir `pixoo_bridge/README.md`.
 
 ## Logs (routeur → Mac)
 
