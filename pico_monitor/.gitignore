@@ -6,3 +6,4 @@ firmware/.flash/
 merlin/logs/
 merlin/run/
 merlin/config.env
+logs/

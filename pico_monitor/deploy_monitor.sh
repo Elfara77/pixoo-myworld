@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
-# Interactive / non-interactive deploy of Pico metrics exporter → Asuswrt-Merlin.
+# Interactive / non-interactive deploy of Merlin metrics + Pixoo bridge.
 #
 # Modes:
 #   ./deploy_monitor.sh              # arrow-key menu (+ number fallback)
 #   ./deploy_monitor.sh install      # non-interactive upload+install+start
 #   ./deploy_monitor.sh uninstall
 #   ./deploy_monitor.sh status
-#   ./deploy_monitor.sh auto         # full pipeline (uninstall→upload→install→flash→run)
+#   ./deploy_monitor.sh auto         # full pipeline (uninstall→upload→install→start bridge)
 #   ./deploy_monitor.sh pilot        # remote pilotage submenu
 #   ./deploy_monitor.sh start|stop|cron-on|cron-off
+#   ./deploy_monitor.sh logs         # pull router logs → pico_monitor/logs/
 #
 # Hosts (do not conflate):
 #   PICO_ROUTER_HOST  Merlin LAN IP — SSH deploy + /metrics.json (default 192.168.50.1)
-#   PICO_MERLIN_HOST  Pico W LAN IP — ping / flash target check (default 192.168.52.4)
-# Firmware config.py ROUTER_HOST must match PICO_ROUTER_HOST.
+#   PIXOO_IP          Divoom Pixoo 64 — HTTP /post push target (default 192.168.52.4)
+#   PICO_MERLIN_HOST  Optional Pico W LAN IP for OLED ping (not required for Pixoo)
+#
+# Auto install starts metrics_server AND pixoo_bridge ON Merlin (Entware).
 #
 # Merlin BusyBox ash often lacks the `command` builtin — remote scripts use
 # `[ -x /path ]` / absolute binaries only. Never source /opt/etc/profile
@@ -22,20 +25,27 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 MERLIN_SRC="${ROOT}/merlin"
+BRIDGE_SRC="${ROOT}/pixoo_bridge"
 FIRMWARE_SRC="${ROOT}/firmware"
+LOCAL_LOGS="${ROOT}/logs"
 CFG_HOME="${HOME}/.pico_monitor_config"
 CFG_PROJECT="${ROOT}/.deploy.env"
 
-# Merlin (SSH + metrics exporter)
+# Merlin (SSH + metrics exporter + Pixoo bridge daemon)
 ROUTER_HOST="${PICO_ROUTER_HOST:-192.168.50.1}"
-# Pico W device (connectivity / docs — not SSH)
-PICO_HOST="${PICO_MERLIN_HOST:-192.168.52.4}"
+# Divoom Pixoo 64 (HTTP push) — primary display for this stack
+PIXOO_IP="${PIXOO_IP:-192.168.52.4}"
+# Optional Pico W (OLED) — ping only; not needed for Pixoo
+PICO_HOST="${PICO_MERLIN_HOST:-}"
 USER_NAME="${PICO_MERLIN_USER:-elphara77}"
 REMOTE_PATH="${PICO_MERLIN_PATH:-/jffs/addons/pico_monitor}"
 PORT="${PICO_MERLIN_PORT:-22}"
 SSH_AUTH="${PICO_SSH_AUTH:-key}"  # key | password
 SSH_PASS="${PICO_SSH_PASS:-}"
 METRICS_PORT="${PICO_METRICS_PORT:-8088}"
+PIXOO_BRIGHTNESS="${PIXOO_BRIGHTNESS:-50}"
+PIXOO_SCREEN_SECONDS="${PIXOO_SCREEN_SECONDS:-8}"
+PIXOO_FRAME_INTERVAL="${PIXOO_FRAME_INTERVAL:-1.05}"
 
 REMOTE_PATH_ENV='export PATH=/opt/bin:/opt/sbin:/opt/usr/bin:/bin:/sbin:/usr/bin:/usr/sbin'
 
@@ -44,11 +54,14 @@ ST_SSH="?"
 ST_UPLOADED="?"
 ST_INSTALLED="?"
 ST_RUNNING="?"
+ST_BRIDGE="?"
 ST_CRU="?"
 ST_METRICS="?"
+ST_PIXOO="?"
 ST_PICO="?"
 ST_DETAIL_PID=""
 ST_DETAIL_CRU=""
+ST_DETAIL_BRIDGE=""
 
 load_config() {
   local f
@@ -73,16 +86,23 @@ load_config() {
       elif [[ -n "${PICO_MERLIN_HOST:-}" && "${PICO_MERLIN_HOST}" == *.50.* ]]; then
         ROUTER_HOST="${PICO_MERLIN_HOST}"
       fi
-      PICO_HOST="${PICO_MERLIN_HOST:-$PICO_HOST}"
-      # If legacy put router IP into PICO_MERLIN_HOST, keep Pico default
-      if [[ "${PICO_HOST}" == "${ROUTER_HOST}" ]]; then
-        PICO_HOST="192.168.52.4"
+      # Pico W ping target (optional). If legacy .deploy.env put Pixoo IP in
+      # PICO_MERLIN_HOST, do not treat that as a Pico — keep PICO_HOST empty.
+      if [[ -n "${PICO_MERLIN_HOST:-}" ]]; then
+        if [[ "${PICO_MERLIN_HOST}" == "${PIXOO_IP}" ]] || [[ "${PICO_MERLIN_HOST}" == "${ROUTER_HOST}" ]]; then
+          PICO_HOST=""
+        else
+          PICO_HOST="${PICO_MERLIN_HOST}"
+        fi
       fi
       USER_NAME="${PICO_MERLIN_USER:-$USER_NAME}"
       REMOTE_PATH="${PICO_MERLIN_PATH:-$REMOTE_PATH}"
       PORT="${PICO_MERLIN_PORT:-$PORT}"
       SSH_AUTH="${PICO_SSH_AUTH:-$SSH_AUTH}"
       METRICS_PORT="${PICO_METRICS_PORT:-$METRICS_PORT}"
+      PIXOO_BRIGHTNESS="${PIXOO_BRIGHTNESS:-50}"
+      PIXOO_SCREEN_SECONDS="${PIXOO_SCREEN_SECONDS:-8}"
+      PIXOO_FRAME_INTERVAL="${PIXOO_FRAME_INTERVAL:-1.05}"
       break
     fi
   done
@@ -91,15 +111,19 @@ load_config() {
 save_config() {
   mkdir -p "$(dirname "${CFG_HOME}")"
   cat > "${CFG_PROJECT}" <<EOF
-# Pico monitor deploy (no passwords stored)
-# PICO_ROUTER_HOST = Merlin (SSH + metrics). PICO_MERLIN_HOST = Pico W (ping).
+# Merlin + Pixoo deploy (no passwords stored)
+# PICO_ROUTER_HOST = Merlin (SSH + metrics + bridge). PIXOO_IP = Divoom Pixoo.
 PICO_ROUTER_HOST=${ROUTER_HOST}
+PIXOO_IP=${PIXOO_IP}
 PICO_MERLIN_HOST=${PICO_HOST}
 PICO_MERLIN_USER=${USER_NAME}
 PICO_MERLIN_PATH=${REMOTE_PATH}
 PICO_MERLIN_PORT=${PORT}
 PICO_SSH_AUTH=${SSH_AUTH}
 PICO_METRICS_PORT=${METRICS_PORT}
+PIXOO_BRIGHTNESS=${PIXOO_BRIGHTNESS}
+PIXOO_SCREEN_SECONDS=${PIXOO_SCREEN_SECONDS}
+PIXOO_FRAME_INTERVAL=${PIXOO_FRAME_INTERVAL}
 EOF
   cp -f "${CFG_PROJECT}" "${CFG_HOME}"
   echo "Saved ${CFG_PROJECT} and ${CFG_HOME}"
@@ -158,11 +182,22 @@ mark_yes_no() {
 }
 
 pico_ping_ok() {
+  [[ -n "${PICO_HOST}" ]] || return 1
   if ping -c 1 -W 2 "${PICO_HOST}" >/dev/null 2>&1; then
     return 0
   fi
   # macOS ping uses -t for timeout
   ping -c 1 -t 2 "${PICO_HOST}" >/dev/null 2>&1
+}
+
+pixoo_http_ok() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 3 -X POST "http://${PIXOO_IP}/post" \
+      -H 'Content-Type: application/json' \
+      -d '{"Command":"Device/GetDeviceTime"}' >/dev/null 2>&1
+    return $?
+  fi
+  return 1
 }
 
 metrics_http_ok() {
@@ -173,22 +208,31 @@ metrics_http_ok() {
   remote "wget -qO- --timeout=4 http://127.0.0.1:${METRICS_PORT}/metrics.json >/dev/null 2>&1" 2>/dev/null
 }
 
-# Probe Merlin + Pico; fills ST_* globals. Quiet (no chatter).
+# Probe Merlin + Pixoo; fills ST_* globals. Quiet (no chatter).
 compute_status() {
   ST_SSH="?"
   ST_UPLOADED="?"
   ST_INSTALLED="?"
   ST_RUNNING="?"
+  ST_BRIDGE="?"
   ST_CRU="?"
   ST_METRICS="?"
+  ST_PIXOO="?"
   ST_PICO="?"
   ST_DETAIL_PID=""
   ST_DETAIL_CRU=""
+  ST_DETAIL_BRIDGE=""
 
-  if pico_ping_ok; then
-    ST_PICO="yes"
+  if pixoo_http_ok; then
+    ST_PIXOO="yes"
   else
-    ST_PICO="no"
+    ST_PIXOO="no"
+  fi
+
+  if [[ -n "${PICO_HOST}" ]]; then
+    if pico_ping_ok; then ST_PICO="yes"; else ST_PICO="no"; fi
+  else
+    ST_PICO="?"
   fi
 
   local blob
@@ -199,6 +243,11 @@ compute_status() {
     else
       echo UPLOADED_NO
     fi
+    if [ -d '${REMOTE_PATH}/pixoo_bridge' ] && [ -f '${REMOTE_PATH}/pixoo_bridge/__main__.py' ]; then
+      echo BRIDGE_PKG_YES
+    else
+      echo BRIDGE_PKG_NO
+    fi
     if [ -x '${REMOTE_PATH}/watchdog.sh' ] && [ -x '${REMOTE_PATH}/install.sh' ]; then
       echo INSTALLED_YES
     else
@@ -208,11 +257,16 @@ compute_status() {
       out=\$( '${REMOTE_PATH}/watchdog.sh' status 2>/dev/null || true )
       echo \"WATCHDOG:\$out\"
       case \"\$out\" in
-        *running*|*'pid='*) echo RUNNING_YES ;;
+        *'metrics running'*) echo RUNNING_YES ;;
         *) echo RUNNING_NO ;;
+      esac
+      case \"\$out\" in
+        *'bridge running'*) echo BRIDGE_YES ;;
+        *) echo BRIDGE_NO ;;
       esac
     else
       echo RUNNING_NO
+      echo BRIDGE_NO
     fi
     if [ -x /usr/sbin/cru ] && /usr/sbin/cru l 2>/dev/null | grep -qi PicoMonitor; then
       echo CRU_YES
@@ -230,6 +284,7 @@ compute_status() {
     ST_UPLOADED="?"
     ST_INSTALLED="?"
     ST_RUNNING="?"
+    ST_BRIDGE="?"
     ST_CRU="?"
     if metrics_http_ok; then ST_METRICS="yes"; else ST_METRICS="no"; fi
     return 0
@@ -239,6 +294,7 @@ compute_status() {
   echo "${blob}" | grep -q UPLOADED_YES && ST_UPLOADED="yes" || ST_UPLOADED="no"
   echo "${blob}" | grep -q INSTALLED_YES && ST_INSTALLED="yes" || ST_INSTALLED="no"
   echo "${blob}" | grep -q RUNNING_YES && ST_RUNNING="yes" || ST_RUNNING="no"
+  echo "${blob}" | grep -q BRIDGE_YES && ST_BRIDGE="yes" || ST_BRIDGE="no"
   if echo "${blob}" | grep -q CRU_YES; then
     ST_CRU="yes"
   elif echo "${blob}" | grep -q SVC_YES; then
@@ -246,8 +302,9 @@ compute_status() {
   else
     ST_CRU="no"
   fi
-  ST_DETAIL_PID="$(echo "${blob}" | sed -n 's/^WATCHDOG://p' | head -n1)"
+  ST_DETAIL_PID="$(echo "${blob}" | sed -n 's/^WATCHDOG://p' | tr '\n' ' ' | head -c 120)"
   ST_DETAIL_CRU="$(echo "${blob}" | grep -i PicoMonitor | head -n1 || true)"
+  ST_DETAIL_BRIDGE="$(echo "${blob}" | grep -E 'BRIDGE_(PKG_)?(YES|NO)' | head -n1 || true)"
 
   if metrics_http_ok; then
     ST_METRICS="yes"
@@ -261,22 +318,38 @@ render_status_block() {
   printf '  Merlin SSH   %s  %s@%s:%s\n' "$(mark_yes_no "${ST_SSH}")" "${USER_NAME}" "${ROUTER_HOST}" "${PORT}"
   printf '  Uploaded     %s  %s\n' "$(mark_yes_no "${ST_UPLOADED}")" "${REMOTE_PATH}"
   printf '  Installed    %s  watchdog/install present\n' "$(mark_yes_no "${ST_INSTALLED}")"
-  printf '  Running      %s  %s\n' "$(mark_yes_no "${ST_RUNNING}")" "${ST_DETAIL_PID:-daemon}"
+  printf '  Metrics      %s  %s\n' "$(mark_yes_no "${ST_RUNNING}")" "${ST_DETAIL_PID:-daemon}"
+  printf '  Pixoo bridge %s  push loop on Merlin\n' "$(mark_yes_no "${ST_BRIDGE}")"
   printf '  Autostart    %s  cru/services-start\n' "$(mark_yes_no "${ST_CRU}")"
   printf '  Metrics HTTP %s  http://%s:%s/metrics.json\n' "$(mark_yes_no "${ST_METRICS}")" "${ROUTER_HOST}" "${METRICS_PORT}"
-  printf '  Pico ping    %s  %s (PICO_MERLIN_HOST)\n' "$(mark_yes_no "${ST_PICO}")" "${PICO_HOST}"
+  printf '  Pixoo API    %s  %s /post\n' "$(mark_yes_no "${ST_PIXOO}")" "${PIXOO_IP}"
+  if [[ -n "${PICO_HOST}" ]]; then
+    printf '  Pico ping    %s  %s (optional OLED)\n' "$(mark_yes_no "${ST_PICO}")" "${PICO_HOST}"
+  fi
   printf '%s\n' "──────────────────────────────────────────────────"
 }
 
 ping_pico() {
+  if [[ -z "${PICO_HOST}" ]]; then
+    echo "==> no PICO_MERLIN_HOST set (optional Pico W OLED) — skip"
+    return 0
+  fi
   echo "==> ping Pico W ${PICO_HOST}"
   if pico_ping_ok; then
     echo "Pico reachable at ${PICO_HOST}"
     return 0
   fi
   echo "Pico NOT reachable at ${PICO_HOST}"
-  echo "  → flash firmware/, set WIFI_SSID/PASSWORD, expect LAN IP ${PICO_HOST}"
-  echo "  → firmware ROUTER_HOST must be Merlin ${ROUTER_HOST}:${METRICS_PORT}"
+  return 1
+}
+
+ping_pixoo() {
+  echo "==> Pixoo API ${PIXOO_IP}"
+  if pixoo_http_ok; then
+    echo "Pixoo OK at ${PIXOO_IP} (Device/GetDeviceTime)"
+    return 0
+  fi
+  echo "Pixoo NOT answering /post at ${PIXOO_IP}"
   return 1
 }
 
@@ -288,7 +361,8 @@ check_prereq() {
     command -v sshpass >/dev/null || { echo "sshpass missing"; return 1; }
   fi
   [[ -d "${MERLIN_SRC}" ]] || { echo "missing ${MERLIN_SRC}"; return 1; }
-  echo "OK router(SSH)=${ROUTER_HOST} pico=${PICO_HOST} user=${USER_NAME}"
+  [[ -d "${BRIDGE_SRC}" ]] || { echo "missing ${BRIDGE_SRC}"; return 1; }
+  echo "OK router(SSH)=${ROUTER_HOST} pixoo=${PIXOO_IP} user=${USER_NAME}"
   echo "   path=${REMOTE_PATH} metrics_port=${METRICS_PORT} auth=${SSH_AUTH}"
   if remote "echo OK" 2>/dev/null | grep -q OK; then
     echo "SSH Merlin: OK"
@@ -296,69 +370,100 @@ check_prereq() {
     echo "SSH Merlin: FAIL (ssh-copy-id $(TARGET))" >&2
     return 1
   fi
+  ping_pixoo || true
   ping_pico || true
 }
 
 configure_router() {
-  echo "Merlin = SSH + /metrics.json. Pico = OLED device (not SSH)."
+  echo "Merlin = SSH + /metrics.json + Pixoo bridge. PIXOO_IP = Divoom display."
   read -r -p "Merlin/router host [${ROUTER_HOST}]: " v; ROUTER_HOST="${v:-$ROUTER_HOST}"
-  read -r -p "Pico W host [${PICO_HOST}]: " v; PICO_HOST="${v:-$PICO_HOST}"
+  read -r -p "Pixoo IP [${PIXOO_IP}]: " v; PIXOO_IP="${v:-$PIXOO_IP}"
+  read -r -p "Pico W host (optional) [${PICO_HOST:-none}]: " v; PICO_HOST="${v:-$PICO_HOST}"
   read -r -p "SSH user [${USER_NAME}]: " v; USER_NAME="${v:-$USER_NAME}"
   read -r -p "Remote path [${REMOTE_PATH}]: " v; REMOTE_PATH="${v:-$REMOTE_PATH}"
   read -r -p "SSH port [${PORT}]: " v; PORT="${v:-$PORT}"
   read -r -p "Metrics HTTP port [${METRICS_PORT}]: " v; METRICS_PORT="${v:-$METRICS_PORT}"
+  read -r -p "Pixoo brightness [${PIXOO_BRIGHTNESS}]: " v; PIXOO_BRIGHTNESS="${v:-$PIXOO_BRIGHTNESS}"
   read -r -p "Auth key/password [${SSH_AUTH}]: " v; SSH_AUTH="${v:-$SSH_AUTH}"
   save_config
-  echo "firmware/config.py → ROUTER_HOST=${ROUTER_HOST} ROUTER_PORT=${METRICS_PORT}"
-  echo "Pico expected Wi‑Fi IP → ${PICO_HOST}"
+  echo "Pixoo bridge will push to ${PIXOO_IP}; metrics on ${ROUTER_HOST}:${METRICS_PORT}"
 }
 
 upload() {
   echo "==> upload → $(TARGET):${REMOTE_PATH}"
-  remote "mkdir -p '${REMOTE_PATH}' '${REMOTE_PATH}/run' '${REMOTE_PATH}/logs'"
+  [[ -d "${BRIDGE_SRC}" ]] || { echo "error: missing ${BRIDGE_SRC}" >&2; return 1; }
+  remote "mkdir -p '${REMOTE_PATH}' '${REMOTE_PATH}/run' '${REMOTE_PATH}/logs' '${REMOTE_PATH}/pixoo_bridge'"
   if command -v rsync >/dev/null 2>&1; then
     local rssh="ssh -p ${PORT}"
     [[ "${SSH_AUTH}" == "key" ]] && rssh="${rssh} -o BatchMode=yes"
+    local -a rsync_common=(
+      -az --delete
+      --exclude 'logs/' --exclude 'run/' --exclude 'config.env'
+      --exclude 'pixoo_bridge/' --exclude '__pycache__/' --exclude '*.pyc'
+      -e "${rssh}"
+    )
     if [[ "${SSH_AUTH}" == "password" ]]; then
+      sshpass -p "${SSH_PASS}" rsync "${rsync_common[@]}" \
+        "${MERLIN_SRC}/" "$(TARGET):${REMOTE_PATH}/"
       sshpass -p "${SSH_PASS}" rsync -az --delete \
-        --exclude 'logs/' --exclude 'run/' --exclude 'config.env' \
+        --exclude '__pycache__/' --exclude '*.pyc' \
         -e "${rssh}" \
-        "${MERLIN_SRC}/" "$(TARGET):${REMOTE_PATH}/"
+        "${BRIDGE_SRC}/" "$(TARGET):${REMOTE_PATH}/pixoo_bridge/"
     else
-      rsync -az --delete \
-        --exclude 'logs/' --exclude 'run/' --exclude 'config.env' \
-        -e "${rssh}" \
+      rsync "${rsync_common[@]}" \
         "${MERLIN_SRC}/" "$(TARGET):${REMOTE_PATH}/"
+      rsync -az --delete \
+        --exclude '__pycache__/' --exclude '*.pyc' \
+        -e "${rssh}" \
+        "${BRIDGE_SRC}/" "$(TARGET):${REMOTE_PATH}/pixoo_bridge/"
     fi
   else
     scp_base -r \
       "${MERLIN_SRC}/metrics_server.py" \
       "${MERLIN_SRC}/run.sh" \
+      "${MERLIN_SRC}/run_pixoo.sh" \
       "${MERLIN_SRC}/watchdog.sh" \
       "${MERLIN_SRC}/install.sh" \
       "${MERLIN_SRC}/uninstall.sh" \
       "${MERLIN_SRC}/config.example.env" \
       "$(TARGET):${REMOTE_PATH}/"
+    scp_base -r \
+      "${BRIDGE_SRC}/__init__.py" \
+      "${BRIDGE_SRC}/__main__.py" \
+      "${BRIDGE_SRC}/client.py" \
+      "${BRIDGE_SRC}/render.py" \
+      "$(TARGET):${REMOTE_PATH}/pixoo_bridge/"
   fi
-  remote "chmod 755 '${REMOTE_PATH}/run.sh' '${REMOTE_PATH}/watchdog.sh' '${REMOTE_PATH}/install.sh' '${REMOTE_PATH}/uninstall.sh'"
-  echo "Upload OK"
+  remote "chmod 755 '${REMOTE_PATH}/run.sh' '${REMOTE_PATH}/run_pixoo.sh' '${REMOTE_PATH}/watchdog.sh' '${REMOTE_PATH}/install.sh' '${REMOTE_PATH}/uninstall.sh' 2>/dev/null || true"
+  echo "Upload OK (merlin + pixoo_bridge)"
 }
 
 install_remote() {
-  echo "==> remote install (opkg python3 + cru + start)"
-  remote "PICO_METRICS_PORT=${METRICS_PORT} /bin/sh '${REMOTE_PATH}/install.sh'"
+  echo "==> remote install (opkg python3+pillow + cru + metrics + Pixoo bridge)"
+  remote "PICO_METRICS_PORT=${METRICS_PORT} PIXOO_IP=${PIXOO_IP} PIXOO_BRIGHTNESS=${PIXOO_BRIGHTNESS} PIXOO_SCREEN_SECONDS=${PIXOO_SCREEN_SECONDS} PIXOO_FRAME_INTERVAL=${PIXOO_FRAME_INTERVAL} /bin/sh '${REMOTE_PATH}/install.sh'"
   echo "Install OK — metrics: http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json"
-  echo ""
-  echo "NOTE: Merlin /metrics.json ≠ OLED pixels."
-  echo "  Flash pico_monitor/firmware/ onto Pico W (LAN IP ~ ${PICO_HOST})"
-  echo "  config.py: WIFI_* + ROUTER_HOST=${ROUTER_HOST} ROUTER_PORT=${METRICS_PORT}"
+  echo "           — Pixoo bridge → ${PIXOO_IP} (daemon on Merlin)"
 }
 
 start_watchdog() {
-  echo "==> start/reload watchdog on Merlin ${ROUTER_HOST}"
+  echo "==> start/ensure metrics + Pixoo bridge on Merlin ${ROUTER_HOST}"
   remote "
     if [ -x '${REMOTE_PATH}/watchdog.sh' ]; then
-      '${REMOTE_PATH}/watchdog.sh' reload 2>/dev/null || '${REMOTE_PATH}/watchdog.sh' start
+      # start is idempotent (cru-safe); does not kill healthy daemons
+      '${REMOTE_PATH}/watchdog.sh' start
+      '${REMOTE_PATH}/watchdog.sh' status || true
+    else
+      echo 'watchdog missing — run upload + install first' >&2
+      exit 1
+    fi
+  "
+}
+
+reload_watchdog() {
+  echo "==> reload metrics + Pixoo bridge on Merlin ${ROUTER_HOST}"
+  remote "
+    if [ -x '${REMOTE_PATH}/watchdog.sh' ]; then
+      '${REMOTE_PATH}/watchdog.sh' reload
       '${REMOTE_PATH}/watchdog.sh' status || true
     else
       echo 'watchdog missing — run upload + install first' >&2
@@ -548,7 +653,44 @@ test_metrics() {
 }
 
 show_logs() {
-  remote "tail -n 40 '${REMOTE_PATH}/logs/pico_metrics.log' 2>/dev/null || echo '(no log yet)'"
+  echo "==> Merlin logs (tail)"
+  remote "
+    echo '-- pixoo_bridge.log --'
+    tail -n 40 '${REMOTE_PATH}/logs/pixoo_bridge.log' 2>/dev/null \
+      || tail -n 40 /tmp/pixoo_bridge.log 2>/dev/null \
+      || echo '(no pixoo_bridge log yet)'
+    echo '-- pico_metrics.log --'
+    tail -n 40 '${REMOTE_PATH}/logs/pico_metrics.log' 2>/dev/null || echo '(no metrics log yet)'
+  "
+}
+
+pull_logs() {
+  echo "==> pull logs → ${LOCAL_LOGS}/"
+  mkdir -p "${LOCAL_LOGS}"
+  local stamp
+  stamp="$(date '+%Y%m%d_%H%M%S')"
+  local dest="${LOCAL_LOGS}/${stamp}"
+  mkdir -p "${dest}"
+  # Prefer jffs persistent logs; also try /tmp mirror
+  scp_base \
+    "$(TARGET):${REMOTE_PATH}/logs/pixoo_bridge.log" \
+    "$(TARGET):${REMOTE_PATH}/logs/pico_metrics.log" \
+    "${dest}/" 2>/dev/null || true
+  scp_base "$(TARGET):/tmp/pixoo_bridge.log" "${dest}/pixoo_bridge.tmp.log" 2>/dev/null || true
+  # Symlink "latest" for convenience
+  ln -sfn "${stamp}" "${LOCAL_LOGS}/latest" 2>/dev/null || true
+  if [[ -f "${dest}/pixoo_bridge.log" ]] || [[ -f "${dest}/pico_metrics.log" ]] || [[ -f "${dest}/pixoo_bridge.tmp.log" ]]; then
+    echo "Logs saved under ${dest}"
+    ls -la "${dest}"
+    echo ""
+    echo "Quick peek (bridge):"
+    tail -n 20 "${dest}/pixoo_bridge.log" 2>/dev/null \
+      || tail -n 20 "${dest}/pixoo_bridge.tmp.log" 2>/dev/null \
+      || echo "(empty)"
+  else
+    echo "warn: no log files found on router — is the bridge installed/started?" >&2
+    return 1
+  fi
 }
 
 uninstall_remote() {
@@ -639,7 +781,7 @@ EOF
 }
 
 status_remote() {
-  echo "==> Merlin ${ROUTER_HOST} + Pico ${PICO_HOST}"
+  echo "==> Merlin ${ROUTER_HOST} + Pixoo ${PIXOO_IP}"
   compute_status
   render_status_block
   echo ""
@@ -656,22 +798,25 @@ status_remote() {
     fi
     echo '-- services-start --'
     grep -n pico_monitor /jffs/scripts/services-start 2>/dev/null || echo '(no hook)'
+    echo '-- recent bridge log --'
+    tail -n 8 '${REMOTE_PATH}/logs/pixoo_bridge.log' 2>/dev/null || echo '(no bridge log)'
   " 2>/dev/null || echo "(SSH unavailable — status from local probes only)"
   test_metrics || true
-  ping_pico || true
+  ping_pixoo || true
   echo ""
-  echo "OLED blank? Metrics on Merlin do not paint the display."
-  echo "  Flash firmware/ → Pico ${PICO_HOST}; ROUTER_HOST=${ROUTER_HOST}:${METRICS_PORT}"
+  echo "Blank Pixoo? Metrics alone do not paint pixels — bridge must run on Merlin."
+  echo "  ./deploy_monitor.sh auto   # or start after install"
+  echo "  ./deploy_monitor.sh logs   # pull ${REMOTE_PATH}/logs/"
 }
 
-# Full pipeline: clean slate → upload → install → flash hint → ensure running
+# Full pipeline: clean slate → upload → install (metrics + Pixoo bridge) → verify
 auto_mode() {
   echo "╔══════════════════════════════════════════╗"
-  echo "║  Mode automatique — pipeline complet     ║"
+  echo "║  Mode automatique — Merlin + Pixoo       ║"
   echo "╚══════════════════════════════════════════╝"
   echo "  Merlin SSH : $(TARGET)"
-  echo "  Pico W     : ${PICO_HOST}"
-  echo "  Steps: uninstall → clean → upload → install → flash → start"
+  echo "  Pixoo      : ${PIXOO_IP}"
+  echo "  Steps: uninstall → clean → upload → install → start → verify"
   echo ""
 
   check_prereq || {
@@ -688,27 +833,35 @@ auto_mode() {
   clean_remote || true
 
   echo ""
-  echo "[3/6] Upload merlin package…"
+  echo "[3/6] Upload merlin + pixoo_bridge…"
   upload
 
   echo ""
-  echo "[4/6] Install (opkg + cru + start)…"
+  echo "[4/6] Install (opkg + cru + metrics + Pixoo bridge)…"
   install_remote
 
   echo ""
-  echo "[5/6] Flash / sync Pico firmware…"
-  flash_pico || true
+  echo "[5/6] Ensure watchdog (metrics + bridge) running…"
+  start_watchdog || true
 
   echo ""
-  echo "[6/6] Ensure watchdog running…"
-  start_watchdog || true
+  echo "[6/6] Verify metrics + Pixoo…"
+  sleep 2
+  test_metrics || true
+  ping_pixoo || true
 
   echo ""
   echo "==> Auto mode finished — live status:"
   compute_status
   render_status_block
   echo ""
-  echo "Next: confirm OLED on Pico ${PICO_HOST} (WIFI + ROUTER_HOST=${ROUTER_HOST})."
+  if [[ "${ST_BRIDGE}" == "yes" ]] && [[ "${ST_METRICS}" == "yes" ]]; then
+    echo "OK — Pixoo bridge running on Merlin → ${PIXOO_IP} (6 screens)."
+  else
+    echo "WARN — check logs: ./deploy_monitor.sh logs"
+    echo "  bridge=${ST_BRIDGE} metrics_http=${ST_METRICS} pixoo_api=${ST_PIXOO}"
+  fi
+  echo "Logs on router: ${REMOTE_PATH}/logs/pixoo_bridge.log"
 }
 
 # --- interactive menu (arrow keys + ENTER; number fallback) ------------------
@@ -723,30 +876,32 @@ clear_screen() {
 
 # Menu items: label|action  (action = function name or quit/back)
 MENU_ITEMS=(
-  "Mode automatique (pipeline complet)|auto_mode"
-  "Prerequisites / SSH + ping Pico|check_prereq"
-  "Configure hosts (Merlin + Pico)|configure_router"
-  "Upload merlin package|upload"
+  "Mode automatique (Merlin + Pixoo)|auto_mode"
+  "Prerequisites / SSH + Pixoo API|check_prereq"
+  "Configure hosts (Merlin + Pixoo)|configure_router"
+  "Upload merlin + pixoo_bridge|upload"
   "Install (opkg + cru + start)|do_install"
-  "Flash Pico firmware (mpremote/manual)|flash_pico"
   "Pilotage distant|pilotage_menu"
-  "Start / restart watchdog|start_watchdog"
+  "Start / restart (metrics+bridge)|start_watchdog"
   "Autostart status (cru)|autostart"
   "Test /metrics.json (Merlin)|test_metrics"
-  "Tail logs|show_logs"
+  "Test Pixoo API|ping_pixoo"
+  "Tail logs (remote)|show_logs"
+  "Récupérer logs → local|pull_logs"
   "Uninstall|uninstall_remote"
   "Refresh status|status_remote"
   "Quit|quit"
 )
 
 PILOT_MENU_ITEMS=(
-  "Start metrics service (watchdog start/reload)|start_watchdog"
-  "Stop metrics service|stop_watchdog"
+  "Start metrics+bridge (watchdog)|start_watchdog"
+  "Stop metrics+bridge|stop_watchdog"
   "Cron ON (cru a PicoMonitor)|cron_on"
   "Cron OFF (cru d PicoMonitor)|cron_off"
   "État détaillé|pilot_status"
-  "Test link Pico|test_link_pico"
+  "Test Pixoo API|ping_pixoo"
   "Test metrics Merlin|test_metrics"
+  "Récupérer logs|pull_logs"
   "Retour|back"
 )
 
@@ -845,9 +1000,9 @@ draw_menu() {
   if [[ "${items_name}" == "PILOT_MENU_ITEMS" ]]; then
     cat <<EOF
 ╔══════════════════════════════════════════╗
-║  Pilotage distant — Merlin / Pico        ║
+║  Pilotage distant — Merlin / Pixoo       ║
 ║  Merlin SSH: ${USER_NAME}@${ROUTER_HOST}
-║  Pico W:     ${PICO_HOST}
+║  Pixoo:      ${PIXOO_IP}
 ║  Remote:     ${REMOTE_PATH}
 ╚══════════════════════════════════════════╝
 
@@ -855,9 +1010,9 @@ EOF
   else
     cat <<EOF
 ╔══════════════════════════════════════════╗
-║  Pico Monitor → Merlin deploy            ║
+║  Merlin metrics + Pixoo bridge deploy    ║
 ║  Merlin SSH: ${USER_NAME}@${ROUTER_HOST}
-║  Pico W:     ${PICO_HOST}
+║  Pixoo:      ${PIXOO_IP}
 ║  Remote:     ${REMOTE_PATH}
 ╚══════════════════════════════════════════╝
 
@@ -866,7 +1021,7 @@ EOF
   render_status_block
   echo ""
   if [[ "${items_name}" == "PILOT_MENU_ITEMS" ]]; then
-    echo "  ↑/↓ move  ·  ENTER run  ·  1-8 jump  ·  q quit"
+    echo "  ↑/↓ move  ·  ENTER run  ·  1-9 jump  ·  q quit"
   else
     echo "  ↑/↓ move  ·  ENTER run  ·  1-9 jump  ·  q quit"
   fi
@@ -886,10 +1041,10 @@ EOF
   printf '  Selected ▸ %s\n' "${label}"
   echo ""
   if [[ "${items_name}" == "PILOT_MENU_ITEMS" ]]; then
-    echo "  start/stop/cron via SSH · Pico = PICO_MERLIN_HOST"
+    echo "  start/stop/cron via SSH · Pixoo = ${PIXOO_IP}"
   else
-    echo "  OLED: Merlin metrics ≠ Pico pixels."
-    echo "  Flash firmware/ + WIFI + ROUTER_HOST=${ROUTER_HOST}"
+    echo "  Auto install starts metrics + Pixoo bridge ON Merlin."
+    echo "  Logs: ${REMOTE_PATH}/logs/  →  ./deploy_monitor.sh logs"
   fi
 }
 
@@ -916,9 +1071,11 @@ run_menu_action() {
     cron_off) cron_off || true ;;
     pilot_status) pilot_status || true ;;
     test_link_pico) test_link_pico || true ;;
+    ping_pixoo) ping_pixoo || true ;;
     autostart) autostart ;;
     test_metrics) test_metrics || true ;;
     show_logs) show_logs ;;
+    pull_logs) pull_logs || true ;;
     uninstall_remote) uninstall_remote ;;
     status_remote) status_remote ;;
     *) echo "unknown action: ${action}" ;;
@@ -1008,9 +1165,9 @@ menu_number_fallback() {
     if [[ "${items_name}" == "PILOT_MENU_ITEMS" ]]; then
       cat <<EOF
 ╔══════════════════════════════════════════╗
-║  Pilotage distant — Merlin / Pico        ║
+║  Pilotage distant — Merlin / Pixoo       ║
 ║  Merlin SSH: ${USER_NAME}@${ROUTER_HOST}
-║  Pico W:     ${PICO_HOST}
+║  Pixoo:      ${PIXOO_IP}
 ║  Remote:     ${REMOTE_PATH}
 ╚══════════════════════════════════════════╝
 
@@ -1018,9 +1175,9 @@ EOF
     else
       cat <<EOF
 ╔══════════════════════════════════════════╗
-║  Pico Monitor → Merlin deploy            ║
+║  Merlin metrics + Pixoo bridge deploy    ║
 ║  Merlin SSH: ${USER_NAME}@${ROUTER_HOST}
-║  Pico W:     ${PICO_HOST}
+║  Pixoo:      ${PIXOO_IP}
 ║  Remote:     ${REMOTE_PATH}
 ╚══════════════════════════════════════════╝
 
@@ -1075,32 +1232,36 @@ menu() {
 
 usage() {
   cat <<EOF
-Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash|pilot|start|stop|cron-on|cron-off]
+Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash|pilot|start|stop|cron-on|cron-off|logs]
 
   (no args) / menu   Interactive menu (↑/↓ + ENTER, or numbers)
-  auto               Full pipeline: uninstall→clean→upload→install→flash→start
-  install            Upload + install + start
+  auto               Full pipeline: uninstall→clean→upload→install→start bridge
+  install            Upload + install + start (metrics + Pixoo bridge on Merlin)
   uninstall          Remove Merlin addon + cru
-  status             Live Merlin + Pico status
-  upload             Sync merlin/ only
+  status             Live Merlin + Pixoo status
+  upload             Sync merlin/ + pixoo_bridge/
   test               GET /metrics.json
-  flash              Pico firmware sync (mpremote) or print steps
+  logs               Pull router logs → pico_monitor/logs/
+  flash              Pico OLED firmware sync (optional; not for Pixoo)
   pilot              Remote pilotage submenu (start/stop/cron/status/tests)
-  start              Start/reload metrics watchdog on Merlin
-  stop               Stop metrics watchdog on Merlin
+  start              Start/reload metrics + Pixoo bridge on Merlin
+  stop               Stop metrics + Pixoo bridge on Merlin
   cron-on            Enable cru job PicoMonitor
   cron-off           Disable cru job PicoMonitor
 
 Env / .deploy.env:
   PICO_ROUTER_HOST  Merlin LAN IP for SSH + metrics (default 192.168.50.1)
-  PICO_MERLIN_HOST  Pico W LAN IP for ping/status   (default 192.168.52.4)
+  PIXOO_IP          Divoom Pixoo 64 (HTTP /post)     (default 192.168.52.4)
+  PICO_MERLIN_HOST  Optional Pico W LAN IP (OLED ping only)
   PICO_MERLIN_USER  SSH user on Merlin              (default elphara77)
   PICO_MERLIN_PATH  remote addon path
   PICO_SSH_AUTH     key|password
   PICO_METRICS_PORT metrics HTTP port (default 8088)
+  PIXOO_BRIGHTNESS / PIXOO_SCREEN_SECONDS / PIXOO_FRAME_INTERVAL
 
-Firmware (on Pico): ROUTER_HOST must equal PICO_ROUTER_HOST.
-Mac preview: python3 preview.py
+Pixoo display: auto install starts pixoo_bridge ON Merlin (Entware).
+Logs: ${REMOTE_PATH:-/jffs/addons/pico_monitor}/logs/pixoo_bridge.log
+      pull with: ./deploy_monitor.sh logs
 EOF
 }
 
@@ -1115,6 +1276,7 @@ case "${CMD}" in
   status) status_remote ;;
   upload) upload ;;
   test) test_metrics ;;
+  logs|pull-logs|pull_logs) pull_logs ;;
   flash) flash_pico ;;
   pilot|pilotage) pilotage_menu ;;
   start) start_watchdog ;;

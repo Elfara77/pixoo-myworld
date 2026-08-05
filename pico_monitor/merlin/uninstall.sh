@@ -1,5 +1,5 @@
 #!/bin/sh
-# Remove pico metrics exporter (cru + services-start + files).
+# Remove pico metrics exporter + Pixoo bridge (cru + services-start + files).
 set -eu
 
 _case0=$0
@@ -24,16 +24,22 @@ fi
 
 if [ -x /usr/sbin/cru ]; then
   /usr/sbin/cru d "${CRU_NAME}" 2>/dev/null || true
+  # Legacy name from old asus_merlin stack
+  /usr/sbin/cru d PixooMerlin 2>/dev/null || true
   echo "==> cru ${CRU_NAME} removed"
 fi
 
 if [ -f "${SERVICES_START}" ]; then
   tmp="${SERVICES_START}.tmp.$$"
   grep -v "${MARKER}" "${SERVICES_START}" > "${tmp}" 2>/dev/null || true
-  mv "${tmp}" "${SERVICES_START}"
+  # Also strip legacy pixoo_merlin marker if present
+  grep -v "# pixoo_merlin" "${tmp}" > "${tmp}.2" 2>/dev/null || true
+  mv "${tmp}.2" "${SERVICES_START}" 2>/dev/null || mv "${tmp}" "${SERVICES_START}"
   chmod 755 "${SERVICES_START}"
   echo "==> services-start cleaned"
 fi
+
+rm -f /tmp/pixoo_bridge.log 2>/dev/null || true
 
 cd / || true
 rm -rf "${ROOT}"

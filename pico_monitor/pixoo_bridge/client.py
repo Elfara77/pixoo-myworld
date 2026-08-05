@@ -72,7 +72,11 @@ class PixooClient:
     def push_image(self, image: Image.Image) -> None:
         rgb = image.convert("RGB")
         if rgb.size != (self.size, self.size):
-            rgb = rgb.resize((self.size, self.size), Image.Resampling.NEAREST)
+            try:
+                resample = Image.Resampling.NEAREST
+            except AttributeError:  # Pillow < 9
+                resample = Image.NEAREST  # type: ignore[attr-defined]
+            rgb = rgb.resize((self.size, self.size), resample)
 
         buf = bytearray()
         pixels = rgb.load()
