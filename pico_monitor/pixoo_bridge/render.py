@@ -583,6 +583,16 @@ def _active_vpns(m: dict[str, Any]) -> list[tuple[str, str]]:
     return out
 
 
+def _vpn_slots(m: dict[str, Any]) -> list[tuple[str, bool, str]]:
+    slots: list[tuple[str, bool, str]] = []
+    for key, fallback in (("vpn1", "VPN1"), ("vpn2", "VPN2")):
+        v = m.get(key) or {}
+        on = bool(v.get("on"))
+        typ = str(v.get("type", "OVPN" if key == "vpn1" else "WG"))[:4]
+        slots.append((fallback, on, typ))
+    return slots
+
+
 def _disk_used_pct(m: dict[str, Any]) -> float:
     """Worst disk fill among JFFS / USB mounts present."""
     vals: list[float] = []
@@ -954,17 +964,22 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
 
     elif sid == "SRV":
         y = 11
-        vpns = _active_vpns(m)
-        if not vpns:
-            _txt(img, 2, y, "VPN", LABEL, size="tiny", role="label")
-            _txt(img, 20, y, "none", DIM, size="tiny", role="value")
-            y += 9
+        slots = _vpn_slots(m)
+        any_vpn = any(on for _, on, _ in slots)
+        _txt(img, 2, y, "VPN", LABEL, size="tiny", role="label")
+        if any_vpn:
+            _txt(img, 20, y, "ON", GREEN, size="tiny", role="status")
         else:
-            for name, typ in vpns:
-                _txt(img, 2, y, name, GREEN, size="tiny", role="status")
-                _txt(img, 28, y, typ, FG, size="tiny", role="value")
-                y += 8
-        y = max(y + 1, 26)
+            _txt(img, 20, y, "off", RED, size="tiny", role="status")
+        y += 8
+        for name, on, typ in slots:
+            _txt(img, 2, y, name, GREEN if on else RED, size="tiny", role="status")
+            if on:
+                _txt(img, 28, y, typ, GREEN, size="tiny", role="value")
+            else:
+                _txt(img, 28, y, "off", RED, size="tiny", role="status")
+            y += 8
+        y += 1
         jffs = m.get("jffs") or {}
         usb2 = m.get("usb2") or {}
         usb3 = m.get("usb3") or {}
