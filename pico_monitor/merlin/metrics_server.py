@@ -172,12 +172,16 @@ def _uptime_str() -> str:
         secs = float(Path("/proc/uptime").read_text().split()[0])
     except (OSError, ValueError):
         return "--"
-    days = int(secs // 86400)
-    hours = int((secs % 86400) // 3600)
+    total_mins = int(secs // 60)
+    days = total_mins // (24 * 60)
+    rem_mins = total_mins % (24 * 60)
+    hours = rem_mins // 60
+    mins = rem_mins % 60
     if days > 0:
-        return f"{days}j{hours:02d}h"
-    mins = int((secs % 3600) // 60)
-    return f"{hours}h{mins:02d}m"
+        return f"{days}d{hours}h"
+    if hours > 0:
+        return f"{hours}h{mins:02d}m"
+    return f"{mins}m"
 
 
 def _temp_cpu() -> float:

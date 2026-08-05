@@ -82,7 +82,7 @@ def _demo_metrics(t):
     _traffic.update(int(t * down / 8), int(t * up / 8), t)
     # fake cumulative via synthetic bytes
     return {
-        "uptime_str": "12j04h",
+        "uptime_str": "12d04h",
         "cpu": int(40 + 35 * abs(math.sin(t / 11))),
         "ram": int(50 + 20 * abs(math.sin(t / 13))),
         "clients": 14,

@@ -513,7 +513,7 @@ def _demo_metrics() -> dict[str, Any]:
     hist_d = [20 + 25 * abs(math.sin((t - i) / 11)) for i in range(32)]
     hist_u = [4 + 5 * abs(math.sin((t - i) / 13)) for i in range(32)]
     return {
-        "uptime_str": "12j04h",
+        "uptime_str": "12d04h",
         "cpu": int(40 + 35 * abs(math.sin(t / 11))),
         "ram": int(50 + 20 * abs(math.sin(t / 13))),
         "clients": 14,
