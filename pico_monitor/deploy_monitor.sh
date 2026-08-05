@@ -419,14 +419,14 @@ visual_defaults() {
 print_visual_profile() {
   cat <<EOF
   ┌─ Profil visuel Pixoo ─────────────────────
-  │  Couleur texte   : ${PIXOO_COLOR_MODE}   (mono|poly)
-  │  Scroll titres   : ${PIXOO_TEXT_SCROLL}      (1=on 0=off)
-  │  Alert blink     : ${PIXOO_ALERT_BLINK}      (1=on 0=off)
-  │  Période blink   : ${PIXOO_BLINK_PERIOD}s
-  │  Luminosité      : ${PIXOO_BRIGHTNESS}     (0–100)
-  │  Durée / écran   : ${PIXOO_SCREEN_SECONDS}s
-  │  Rafraîchissement: ${PIXOO_FRAME_INTERVAL}s  (push HTTP)
-  │  Unités débit    : ${PIXOO_RATE_STYLE}  (short=K/M/G · long=Kb/s)
+  │  Couleur texte     : ${PIXOO_COLOR_MODE}   (mono|poly)
+  │  Scroll titres     : ${PIXOO_TEXT_SCROLL}      (1=on 0=off)
+  │  Alert blink       : ${PIXOO_ALERT_BLINK}      (1=on 0=off)
+  │  Période blink     : ${PIXOO_BLINK_PERIOD}s
+  │  Luminosité        : ${PIXOO_BRIGHTNESS}     (0–100)
+  │  Temps par écran   : ${PIXOO_SCREEN_SECONDS}s  (rotation des 7 écrans)
+  │  Rafraîchissement  : ${PIXOO_FRAME_INTERVAL}s  (push HTTP frame)
+  │  Unités débit      : ${PIXOO_RATE_STYLE}  (short=K/M/G · long=Kb/s)
   └───────────────────────────────────────────
 EOF
 }
@@ -491,14 +491,19 @@ configure_visual() {
       PIXOO_BLINK_PERIOD="$(_ask_choice "Période blink (s)" "${PIXOO_BLINK_PERIOD}" '^[0-9]+([.][0-9]+)?$')"
       PIXOO_BRIGHTNESS="$(_ask_choice "Luminosité 0–100" "${PIXOO_BRIGHTNESS}" '^[0-9]+$')"
       if (( PIXOO_BRIGHTNESS > 100 )); then PIXOO_BRIGHTNESS=100; fi
-      PIXOO_SCREEN_SECONDS="$(_ask_choice "Secondes par écran" "${PIXOO_SCREEN_SECONDS}" '^[0-9]+([.][0-9]+)?$')"
-      PIXOO_FRAME_INTERVAL="$(_ask_choice "Intervalle refresh (s)" "${PIXOO_FRAME_INTERVAL}" '^[0-9]+([.][0-9]+)?$')"
+      PIXOO_SCREEN_SECONDS="$(_ask_choice "Temps par écran (s) — rotation" "${PIXOO_SCREEN_SECONDS}" '^[0-9]+([.][0-9]+)?$')"
+      PIXOO_FRAME_INTERVAL="$(_ask_choice "Intervalle refresh HTTP (s)" "${PIXOO_FRAME_INTERVAL}" '^[0-9]+([.][0-9]+)?$')"
       PIXOO_RATE_STYLE="$(_ask_choice "Unités débit short|long" "${PIXOO_RATE_STYLE}" '^(short|long)$')"
       echo ""
       echo "Nouveau profil :"
       print_visual_profile
       ;;
   esac
+
+  # Always confirm screen dwell time (often adjusted independently)
+  echo ""
+  PIXOO_SCREEN_SECONDS="$(_ask_choice "Temps par écran (secondes, rotation des écrans)" "${PIXOO_SCREEN_SECONDS}" '^[0-9]+([.][0-9]+)?$')"
+  echo "→ temps par écran = ${PIXOO_SCREEN_SECONDS}s"
 
   save_config
   apply_visual_remote || true

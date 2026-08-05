@@ -40,6 +40,9 @@ cd pico_monitor
 | `PIXOO_ALERT_BLINK` / `--alert-blink` | `1` | Blink critical text/gauge fills (CPU/RAM≥90, temps, disk≥90, WAN off) |
 | `PIXOO_BLINK_PERIOD` / `--blink-period` | `0.55` | Half-cycle seconds (~1 Hz full blink with default frame interval) |
 | `PIXOO_RATE_STYLE` / `--rate-style` | `short` | `short`=K/M/G · `long`=Kb/s\|Mb/s\|Gb/s |
+| `PIXOO_SCREEN_SECONDS` / `--screen-seconds` | `8` | Temps d’affichage par écran (rotation) |
+| `PIXOO_FRAME_INTERVAL` / `--frame-interval` | `1.05` | Intervalle minimum entre pushes HTTP |
+| `PIXOO_BRIGHTNESS` / `--brightness` | `50` | Luminosité Pixoo 0–100 |
 
 Assistant interactif : `./deploy_monitor.sh visual` (aussi après `auto`, et entrée menu).
 
