@@ -2,10 +2,11 @@
 # Interactive / non-interactive deploy of Pico metrics exporter → Asuswrt-Merlin.
 #
 # Modes:
-#   ./deploy_monitor.sh              # menu
+#   ./deploy_monitor.sh              # arrow-key menu (+ number fallback)
 #   ./deploy_monitor.sh install      # non-interactive upload+install+start
 #   ./deploy_monitor.sh uninstall
 #   ./deploy_monitor.sh status
+#   ./deploy_monitor.sh auto         # full pipeline (uninstall→upload→install→flash→run)
 #
 # Hosts (do not conflate):
 #   PICO_ROUTER_HOST  Merlin LAN IP — SSH deploy + /metrics.json (default 192.168.50.1)
@@ -19,6 +20,7 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 MERLIN_SRC="${ROOT}/merlin"
+FIRMWARE_SRC="${ROOT}/firmware"
 CFG_HOME="${HOME}/.pico_monitor_config"
 CFG_PROJECT="${ROOT}/.deploy.env"
 
@@ -34,6 +36,17 @@ SSH_PASS="${PICO_SSH_PASS:-}"
 METRICS_PORT="${PICO_METRICS_PORT:-8088}"
 
 REMOTE_PATH_ENV='export PATH=/opt/bin:/opt/sbin:/opt/usr/bin:/bin:/sbin:/usr/bin:/usr/sbin'
+
+# Live status flags (yes|no|?) refreshed by compute_status
+ST_SSH="?"
+ST_UPLOADED="?"
+ST_INSTALLED="?"
+ST_RUNNING="?"
+ST_CRU="?"
+ST_METRICS="?"
+ST_PICO="?"
+ST_DETAIL_PID=""
+ST_DETAIL_CRU=""
 
 load_config() {
   local f
@@ -131,10 +144,131 @@ remote() {
 $1"
 }
 
+# --- status helpers ----------------------------------------------------------
+
+mark_yes_no() {
+  # $1 = yes|no|?
+  case "${1}" in
+    yes) printf '%s' 'YES' ;;
+    no)  printf '%s' 'no ' ;;
+    *)   printf '%s' '?  ' ;;
+  esac
+}
+
+pico_ping_ok() {
+  if ping -c 1 -W 2 "${PICO_HOST}" >/dev/null 2>&1; then
+    return 0
+  fi
+  # macOS ping uses -t for timeout
+  ping -c 1 -t 2 "${PICO_HOST}" >/dev/null 2>&1
+}
+
+metrics_http_ok() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 4 "http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json" >/dev/null 2>&1
+    return $?
+  fi
+  remote "wget -qO- --timeout=4 http://127.0.0.1:${METRICS_PORT}/metrics.json >/dev/null 2>&1" 2>/dev/null
+}
+
+# Probe Merlin + Pico; fills ST_* globals. Quiet (no chatter).
+compute_status() {
+  ST_SSH="?"
+  ST_UPLOADED="?"
+  ST_INSTALLED="?"
+  ST_RUNNING="?"
+  ST_CRU="?"
+  ST_METRICS="?"
+  ST_PICO="?"
+  ST_DETAIL_PID=""
+  ST_DETAIL_CRU=""
+
+  if pico_ping_ok; then
+    ST_PICO="yes"
+  else
+    ST_PICO="no"
+  fi
+
+  local blob
+  if ! blob="$(remote "
+    echo SSH_OK
+    if [ -f '${REMOTE_PATH}/metrics_server.py' ] && [ -f '${REMOTE_PATH}/watchdog.sh' ]; then
+      echo UPLOADED_YES
+    else
+      echo UPLOADED_NO
+    fi
+    if [ -x '${REMOTE_PATH}/watchdog.sh' ] && [ -x '${REMOTE_PATH}/install.sh' ]; then
+      echo INSTALLED_YES
+    else
+      echo INSTALLED_NO
+    fi
+    if [ -x '${REMOTE_PATH}/watchdog.sh' ]; then
+      out=\$( '${REMOTE_PATH}/watchdog.sh' status 2>/dev/null || true )
+      echo \"WATCHDOG:\$out\"
+      case \"\$out\" in
+        *running*|*'pid='*) echo RUNNING_YES ;;
+        *) echo RUNNING_NO ;;
+      esac
+    else
+      echo RUNNING_NO
+    fi
+    if [ -x /usr/sbin/cru ] && /usr/sbin/cru l 2>/dev/null | grep -qi PicoMonitor; then
+      echo CRU_YES
+      /usr/sbin/cru l 2>/dev/null | grep -i PicoMonitor | head -n1
+    else
+      echo CRU_NO
+    fi
+    if [ -f /jffs/scripts/services-start ] && grep -q pico_monitor /jffs/scripts/services-start 2>/dev/null; then
+      echo SVC_YES
+    else
+      echo SVC_NO
+    fi
+  " 2>/dev/null)"; then
+    ST_SSH="no"
+    ST_UPLOADED="?"
+    ST_INSTALLED="?"
+    ST_RUNNING="?"
+    ST_CRU="?"
+    if metrics_http_ok; then ST_METRICS="yes"; else ST_METRICS="no"; fi
+    return 0
+  fi
+
+  ST_SSH="yes"
+  echo "${blob}" | grep -q UPLOADED_YES && ST_UPLOADED="yes" || ST_UPLOADED="no"
+  echo "${blob}" | grep -q INSTALLED_YES && ST_INSTALLED="yes" || ST_INSTALLED="no"
+  echo "${blob}" | grep -q RUNNING_YES && ST_RUNNING="yes" || ST_RUNNING="no"
+  if echo "${blob}" | grep -q CRU_YES; then
+    ST_CRU="yes"
+  elif echo "${blob}" | grep -q SVC_YES; then
+    ST_CRU="yes"
+  else
+    ST_CRU="no"
+  fi
+  ST_DETAIL_PID="$(echo "${blob}" | sed -n 's/^WATCHDOG://p' | head -n1)"
+  ST_DETAIL_CRU="$(echo "${blob}" | grep -i PicoMonitor | head -n1 || true)"
+
+  if metrics_http_ok; then
+    ST_METRICS="yes"
+  else
+    ST_METRICS="no"
+  fi
+}
+
+render_status_block() {
+  printf '%s\n' "── Status ─────────────────────────────────────────"
+  printf '  Merlin SSH   %s  %s@%s:%s\n' "$(mark_yes_no "${ST_SSH}")" "${USER_NAME}" "${ROUTER_HOST}" "${PORT}"
+  printf '  Uploaded     %s  %s\n' "$(mark_yes_no "${ST_UPLOADED}")" "${REMOTE_PATH}"
+  printf '  Installed    %s  watchdog/install present\n' "$(mark_yes_no "${ST_INSTALLED}")"
+  printf '  Running      %s  %s\n' "$(mark_yes_no "${ST_RUNNING}")" "${ST_DETAIL_PID:-daemon}"
+  printf '  Autostart    %s  cru/services-start\n' "$(mark_yes_no "${ST_CRU}")"
+  printf '  Metrics HTTP %s  http://%s:%s/metrics.json\n' "$(mark_yes_no "${ST_METRICS}")" "${ROUTER_HOST}" "${METRICS_PORT}"
+  printf '  Pico ping    %s  %s (PICO_MERLIN_HOST)\n' "$(mark_yes_no "${ST_PICO}")" "${PICO_HOST}"
+  printf '%s\n' "──────────────────────────────────────────────────"
+}
+
 ping_pico() {
   echo "==> ping Pico W ${PICO_HOST}"
-  if ping -c 1 -W 2 "${PICO_HOST}" >/dev/null 2>&1 || \
-     ping -c 1 -t 2 "${PICO_HOST}" >/dev/null 2>&1; then
+  if pico_ping_ok; then
     echo "Pico reachable at ${PICO_HOST}"
     return 0
   fi
@@ -218,6 +352,19 @@ install_remote() {
   echo "  config.py: WIFI_* + ROUTER_HOST=${ROUTER_HOST} ROUTER_PORT=${METRICS_PORT}"
 }
 
+start_watchdog() {
+  echo "==> start watchdog on Merlin ${ROUTER_HOST}"
+  remote "
+    if [ -x '${REMOTE_PATH}/watchdog.sh' ]; then
+      '${REMOTE_PATH}/watchdog.sh' start
+      '${REMOTE_PATH}/watchdog.sh' status || true
+    else
+      echo 'watchdog missing — run upload + install first' >&2
+      exit 1
+    fi
+  "
+}
+
 autostart() {
   echo "==> autostart (cru + services-start) on Merlin ${ROUTER_HOST}"
   remote "
@@ -227,7 +374,7 @@ autostart() {
       if /usr/sbin/cru l 2>/dev/null | grep -qi PicoMonitor; then
         echo 'cru: PicoMonitor OK'
       else
-        echo 'cru: NO PicoMonitor entry (run menu 4 Install)'
+        echo 'cru: NO PicoMonitor entry (run Install)'
       fi
     else
       echo 'cru: /usr/sbin/cru missing'
@@ -280,8 +427,79 @@ uninstall_remote() {
   "
 }
 
+# Soft clean: stop daemon + wipe remote tree without requiring uninstall.sh
+clean_remote() {
+  echo "==> clean remote ${REMOTE_PATH}"
+  remote "
+    [ -x '${REMOTE_PATH}/watchdog.sh' ] && '${REMOTE_PATH}/watchdog.sh' stop 2>/dev/null || true
+    [ -x /usr/sbin/cru ] && /usr/sbin/cru d PicoMonitor 2>/dev/null || true
+    if [ -f /jffs/scripts/services-start ]; then
+      grep -v pico_monitor /jffs/scripts/services-start > /tmp/ss.\$\$ 2>/dev/null || true
+      mv /tmp/ss.\$\$ /jffs/scripts/services-start
+      chmod 755 /jffs/scripts/services-start 2>/dev/null || true
+    fi
+    cd / && rm -rf '${REMOTE_PATH}'
+    echo 'clean OK'
+  " || true
+}
+
+# Flash / sync firmware onto Pico (USB via mpremote/rshell if present)
+flash_pico() {
+  echo "==> Pico firmware (LAN target ${PICO_HOST})"
+  echo "  Merlin metrics host for config.py: ROUTER_HOST=${ROUTER_HOST} ROUTER_PORT=${METRICS_PORT}"
+  echo ""
+  if [[ ! -d "${FIRMWARE_SRC}" ]]; then
+    echo "error: missing ${FIRMWARE_SRC}" >&2
+    return 1
+  fi
+
+  local tool=""
+  if command -v mpremote >/dev/null 2>&1; then
+    tool="mpremote"
+  elif command -v rshell >/dev/null 2>&1; then
+    tool="rshell"
+  fi
+
+  if [[ "${tool}" == "mpremote" ]]; then
+    echo "Detected mpremote — syncing firmware/ to Pico (USB)…"
+    echo "  Ensure Pico is connected over USB (not only Wi‑Fi)."
+    if mpremote cp -r "${FIRMWARE_SRC}/." :; then
+      echo "mpremote sync OK — soft-reset recommended: mpremote reset"
+      mpremote reset 2>/dev/null || true
+      return 0
+    fi
+    echo "mpremote sync failed (device busy / wrong port?). Manual steps below."
+  elif [[ "${tool}" == "rshell" ]]; then
+    echo "Detected rshell — copy firmware manually, e.g.:"
+    echo "  rshell -p /dev/tty.usbmodem* cp -r ${FIRMWARE_SRC}/* /pyboard/"
+  else
+    echo "No mpremote/rshell in PATH — print manual flash steps."
+  fi
+
+  cat <<EOF
+
+Manual flash (Thonny or mpremote):
+  1. Connect Pico W over USB
+  2. Copy pico_monitor/firmware/* onto the board
+       mpremote cp -r firmware/. :
+       # or open folder in Thonny → Save to Pico
+  3. Edit firmware/config.py on device:
+       WIFI_SSID / WIFI_PASSWORD
+       ROUTER_HOST=${ROUTER_HOST}
+       ROUTER_PORT=${METRICS_PORT}
+       DEMO=0
+  4. Soft-reset → expect PICO BOOT / WIFI OK / metrics pull
+  5. Pico should appear on LAN as ${PICO_HOST}
+
+EOF
+  return 0
+}
+
 status_remote() {
   echo "==> Merlin ${ROUTER_HOST} + Pico ${PICO_HOST}"
+  compute_status
+  render_status_block
+  echo ""
   remote "
     echo '-- daemon --'
     if [ -x '${REMOTE_PATH}/watchdog.sh' ]; then
@@ -295,7 +513,7 @@ status_remote() {
     fi
     echo '-- services-start --'
     grep -n pico_monitor /jffs/scripts/services-start 2>/dev/null || echo '(no hook)'
-  "
+  " 2>/dev/null || echo "(SSH unavailable — status from local probes only)"
   test_metrics || true
   ping_pico || true
   echo ""
@@ -303,51 +521,324 @@ status_remote() {
   echo "  Flash firmware/ → Pico ${PICO_HOST}; ROUTER_HOST=${ROUTER_HOST}:${METRICS_PORT}"
 }
 
-menu() {
-  load_config
-  while true; do
-    cat <<EOF
+# Full pipeline: clean slate → upload → install → flash hint → ensure running
+auto_mode() {
+  echo "╔══════════════════════════════════════════╗"
+  echo "║  Mode automatique — pipeline complet     ║"
+  echo "╚══════════════════════════════════════════╝"
+  echo "  Merlin SSH : $(TARGET)"
+  echo "  Pico W     : ${PICO_HOST}"
+  echo "  Steps: uninstall → clean → upload → install → flash → start"
+  echo ""
 
+  check_prereq || {
+    echo "error: prerequisites failed — fix SSH / hosts first" >&2
+    return 1
+  }
+
+  echo ""
+  echo "[1/6] Uninstall (if present)…"
+  uninstall_remote || true
+
+  echo ""
+  echo "[2/6] Clean remote tree…"
+  clean_remote || true
+
+  echo ""
+  echo "[3/6] Upload merlin package…"
+  upload
+
+  echo ""
+  echo "[4/6] Install (opkg + cru + start)…"
+  install_remote
+
+  echo ""
+  echo "[5/6] Flash / sync Pico firmware…"
+  flash_pico || true
+
+  echo ""
+  echo "[6/6] Ensure watchdog running…"
+  start_watchdog || true
+
+  echo ""
+  echo "==> Auto mode finished — live status:"
+  compute_status
+  render_status_block
+  echo ""
+  echo "Next: confirm OLED on Pico ${PICO_HOST} (WIFI + ROUTER_HOST=${ROUTER_HOST})."
+}
+
+# --- interactive menu (arrow keys + ENTER; number fallback) ------------------
+
+clear_screen() {
+  if command -v clear >/dev/null 2>&1; then
+    clear
+  else
+    printf '\033[2J\033[H'
+  fi
+}
+
+# Menu items: label|action  (action = function name or quit)
+MENU_ITEMS=(
+  "Mode automatique (pipeline complet)|auto_mode"
+  "Prerequisites / SSH + ping Pico|check_prereq"
+  "Configure hosts (Merlin + Pico)|configure_router"
+  "Upload merlin package|upload"
+  "Install (opkg + cru + start)|do_install"
+  "Flash Pico firmware (mpremote/manual)|flash_pico"
+  "Start / restart watchdog|start_watchdog"
+  "Autostart status (cru)|autostart"
+  "Test /metrics.json (Merlin)|test_metrics"
+  "Tail logs|show_logs"
+  "Uninstall|uninstall_remote"
+  "Refresh status|status_remote"
+  "Quit|quit"
+)
+
+do_install() {
+  upload
+  install_remote
+}
+
+# Returns 0 if stdin is a TTY and we can use raw reads
+menu_raw_supported() {
+  [[ -t 0 ]] && [[ -t 1 ]] || return 1
+  command -v stty >/dev/null 2>&1 || return 1
+  # Probe: must restore on exit
+  local saved
+  saved="$(stty -g 2>/dev/null)" || return 1
+  stty -echo -icanon time 0 min 0 2>/dev/null || return 1
+  stty "${saved}" 2>/dev/null || true
+  return 0
+}
+
+# Read one menu key: up|down|enter|quit|digit|other
+# Escape sequences via read -n; -t uses whole seconds (bash 3.2 / macOS).
+read_menu_key() {
+  local saved key rest
+  saved="$(stty -g 2>/dev/null)" || { echo other; return 1; }
+  stty -echo -icanon time 0 min 1 2>/dev/null || {
+    stty "${saved}" 2>/dev/null || true
+    echo other
+    return 1
+  }
+  # shellcheck disable=SC2162
+  IFS= read -r -n 1 key || true
+  case "${key}" in
+    $'\x1b')
+      # ESC [ A/B  or ESC O A/B (arrow keys)
+      IFS= read -r -n 1 -t 1 rest || rest=""
+      if [[ "${rest}" == "[" ]] || [[ "${rest}" == "O" ]]; then
+        IFS= read -r -n 1 -t 1 rest || rest=""
+        case "${rest}" in
+          A) stty "${saved}" 2>/dev/null || true; echo up; return 0 ;;
+          B) stty "${saved}" 2>/dev/null || true; echo down; return 0 ;;
+        esac
+      fi
+      stty "${saved}" 2>/dev/null || true
+      echo other
+      return 0
+      ;;
+    ""|$'\n'|$'\r')
+      stty "${saved}" 2>/dev/null || true
+      echo enter
+      return 0
+      ;;
+    q|Q)
+      stty "${saved}" 2>/dev/null || true
+      echo quit
+      return 0
+      ;;
+    [0-9])
+      stty "${saved}" 2>/dev/null || true
+      echo "digit:${key}"
+      return 0
+      ;;
+    *)
+      stty "${saved}" 2>/dev/null || true
+      echo other
+      return 0
+      ;;
+  esac
+}
+
+menu_label() {
+  local item="$1"
+  printf '%s' "${item%%|*}"
+}
+
+menu_action() {
+  local item="$1"
+  printf '%s' "${item#*|}"
+}
+
+draw_menu() {
+  local sel="$1"
+  local i=0
+  local n=${#MENU_ITEMS[@]}
+  local label
+
+  clear_screen
+  cat <<EOF
 ╔══════════════════════════════════════════╗
 ║  Pico Monitor → Merlin deploy            ║
 ║  Merlin SSH: ${USER_NAME}@${ROUTER_HOST}
 ║  Pico W:     ${PICO_HOST}
 ║  Remote:     ${REMOTE_PATH}
 ╚══════════════════════════════════════════╝
-  1) Prerequisites / SSH + ping Pico
-  2) Configure hosts (Merlin + Pico)
-  3) Upload merlin package
-  4) Install (opkg + cru + start)
-  5) Autostart status
-  6) Test /metrics.json (Merlin)
-  7) Tail logs
-  8) Uninstall
-  9) Status (Merlin + Pico ping)
-  0) Quit
 
-  OLED: Merlin metrics ≠ Pico pixels.
-  Flash firmware/ + WIFI + ROUTER_HOST=${ROUTER_HOST}
 EOF
-    read -r -p "Choice: " c
-    case "${c}" in
-      1) check_prereq || true ;;
-      2) configure_router ;;
-      3) upload ;;
-      4) upload; install_remote ;;
-      5) autostart ;;
-      6) test_metrics ;;
-      7) show_logs ;;
-      8) uninstall_remote ;;
-      9) status_remote ;;
-      0|q|Q) exit 0 ;;
-      *) echo "?" ;;
+  render_status_block
+  echo ""
+  echo "  ↑/↓ move  ·  ENTER run  ·  1-9 jump  ·  q quit"
+  echo ""
+
+  for ((i = 0; i < n; i++)); do
+    label="$(menu_label "${MENU_ITEMS[$i]}")"
+    if (( i == sel )); then
+      printf '  \033[7m > %2d) %-42s \033[0m\n' "$((i + 1))" "${label}"
+    else
+      printf '     %2d) %s\n' "$((i + 1))" "${label}"
+    fi
+  done
+
+  echo ""
+  label="$(menu_label "${MENU_ITEMS[$sel]}")"
+  printf '  Selected ▸ %s\n' "${label}"
+  echo ""
+  echo "  OLED: Merlin metrics ≠ Pico pixels."
+  echo "  Flash firmware/ + WIFI + ROUTER_HOST=${ROUTER_HOST}"
+}
+
+pause_return() {
+  echo ""
+  read -r -p "Press ENTER to return to menu… " _
+}
+
+run_menu_action() {
+  local action="$1"
+  case "${action}" in
+    quit) exit 0 ;;
+    auto_mode) auto_mode ;;
+    check_prereq) check_prereq || true ;;
+    configure_router) configure_router ;;
+    upload) upload ;;
+    do_install) do_install ;;
+    flash_pico) flash_pico || true ;;
+    start_watchdog) start_watchdog || true ;;
+    autostart) autostart ;;
+    test_metrics) test_metrics || true ;;
+    show_logs) show_logs ;;
+    uninstall_remote) uninstall_remote ;;
+    status_remote) status_remote ;;
+    *) echo "unknown action: ${action}" ;;
+  esac
+}
+
+menu_arrow() {
+  local sel=0
+  local n=${#MENU_ITEMS[@]}
+  local key action idx
+  local need_status=1
+
+  while true; do
+    if (( need_status )); then
+      compute_status || true
+      need_status=0
+    fi
+    draw_menu "${sel}"
+    key="$(read_menu_key)" || key="other"
+    case "${key}" in
+      up)
+        sel=$(( (sel - 1 + n) % n ))
+        ;;
+      down)
+        sel=$(( (sel + 1) % n ))
+        ;;
+      enter)
+        action="$(menu_action "${MENU_ITEMS[$sel]}")"
+        clear_screen
+        run_menu_action "${action}"
+        [[ "${action}" == "quit" ]] && exit 0
+        pause_return
+        need_status=1
+        ;;
+      quit)
+        exit 0
+        ;;
+      digit:*)
+        # Jump highlight to item N (1-9); ENTER confirms. Items 10+ use arrows.
+        idx="${key#digit:}"
+        if [[ "${idx}" =~ ^[1-9]$ ]] && (( idx >= 1 && idx <= n )); then
+          sel=$((idx - 1))
+        fi
+        ;;
+      *)
+        # ignore unknown keys; redraw
+        ;;
     esac
   done
 }
 
+menu_number_fallback() {
+  local c n=${#MENU_ITEMS[@]}
+  local i label action
+  while true; do
+    compute_status || true
+    clear_screen
+    cat <<EOF
+╔══════════════════════════════════════════╗
+║  Pico Monitor → Merlin deploy            ║
+║  Merlin SSH: ${USER_NAME}@${ROUTER_HOST}
+║  Pico W:     ${PICO_HOST}
+║  Remote:     ${REMOTE_PATH}
+╚══════════════════════════════════════════╝
+
+EOF
+    render_status_block
+    echo ""
+    echo "  (arrow keys unavailable — use numbers)"
+    echo ""
+    for ((i = 0; i < n; i++)); do
+      label="$(menu_label "${MENU_ITEMS[$i]}")"
+      printf '  %2d) %s\n' "$((i + 1))" "${label}"
+    done
+    echo ""
+    read -r -p "Choice [1-${n}]: " c
+    if [[ "${c}" =~ ^[0-9]+$ ]] && (( c >= 1 && c <= n )); then
+      action="$(menu_action "${MENU_ITEMS[$((c - 1))]}")"
+      printf '  Selected ▸ %s\n\n' "$(menu_label "${MENU_ITEMS[$((c - 1))]}")"
+      run_menu_action "${action}"
+      [[ "${action}" == "quit" ]] && exit 0
+      pause_return
+    else
+      echo "?"
+      sleep 1
+    fi
+  done
+}
+
+menu() {
+  load_config
+  if menu_raw_supported; then
+    menu_arrow
+  else
+    menu_number_fallback
+  fi
+}
+
 usage() {
   cat <<EOF
-Usage: $0 [install|uninstall|status|menu]
+Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash]
+
+  (no args) / menu   Interactive menu (↑/↓ + ENTER, or numbers)
+  auto               Full pipeline: uninstall→clean→upload→install→flash→start
+  install            Upload + install + start
+  uninstall          Remove Merlin addon + cru
+  status             Live Merlin + Pico status
+  upload             Sync merlin/ only
+  test               GET /metrics.json
+  flash              Pico firmware sync (mpremote) or print steps
 
 Env / .deploy.env:
   PICO_ROUTER_HOST  Merlin LAN IP for SSH + metrics (default 192.168.50.1)
@@ -367,10 +858,12 @@ CMD="${1:-menu}"
 case "${CMD}" in
   -h|--help|help) usage ;;
   menu) menu ;;
+  auto|automatic|auto_mode) auto_mode ;;
   install) check_prereq; upload; install_remote ;;
   uninstall) uninstall_remote ;;
   status) status_remote ;;
   upload) upload ;;
   test) test_metrics ;;
+  flash) flash_pico ;;
   *) usage; exit 2 ;;
 esac

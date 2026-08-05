@@ -26,7 +26,7 @@ Ne pas mettre l’IP du Pico dans `ROUTER_HOST` (le Pico ne sert pas `/metrics.j
 
 ```
 pico_monitor/
-├── deploy_monitor.sh      # menu + install|uninstall|status
+├── deploy_monitor.sh      # menu ↑/↓ + auto|install|uninstall|status
 ├── preview.py             # rendu Mac des écrans → previews/*.png
 ├── firmware/              # à flasher sur le Pico W
 └── merlin/                # déployé sur le routeur
@@ -43,10 +43,19 @@ Prérequis : SSH clé vers le **routeur** (`ssh-copy-id elphara77@192.168.50.1`)
 cd pico_monitor
 chmod +x deploy_monitor.sh install.sh uninstall.sh merlin/*.sh
 cp -n .deploy.env.example .deploy.env   # éditer si besoin
-./deploy_monitor.sh                 # menu
+./deploy_monitor.sh                 # menu interactif (↑/↓ + ENTER)
+./deploy_monitor.sh auto            # pipeline complet
 ./deploy_monitor.sh install
 ./deploy_monitor.sh status          # cru + metrics + ping Pico
 ```
+
+### Menu interactif
+
+- Écran effacé à chaque affichage ; statut live (SSH, upload, install, running, cru, metrics HTTP, ping Pico).
+- Navigation **↑/↓** + **ENTER** (surlignage + ligne `Selected ▸ …`). Numéros `1-9` pour sauter ; sinon menu numérique si le mode raw échoue.
+- Premier item : **Mode automatique** — uninstall → clean → upload → install → flash Pico → start watchdog.
+
+CLI non interactif inchangé : `install|uninstall|status|upload|test|flash|auto`.
 
 `.deploy.env` / `~/.pico_monitor_config` (sans mot de passe) :
 
@@ -62,7 +71,9 @@ curl -s http://192.168.50.1:8088/metrics.json | head
 
 ## Flasher le Pico W
 
-1. Copier `firmware/*` sur le Pico (Thonny / `mpremote cp -r firmware/ :`).
+Via le menu (**Flash Pico firmware**) / `./deploy_monitor.sh flash` : tente `mpremote` si présent, sinon affiche les étapes Thonny/manuelles.
+
+1. Copier `firmware/*` sur le Pico (Thonny / `mpremote cp -r firmware/. :`).
 2. Éditer `firmware/config.py` :
    - `WIFI_SSID` / `WIFI_PASSWORD`
    - `ROUTER_HOST=192.168.50.1`  ← Merlin, pas l’IP du Pico
