@@ -1282,6 +1282,53 @@ def _draw_sum_graph_dir_badge(
     pf.draw_tiny(img, x + pad, y + pad, lab, (0, 0, 0))
 
 
+def _draw_sum_inv_lab(
+    img,
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    text: str,
+    fill: Sequence[int],
+) -> int:
+    """Inverted tiny label (black on `fill`, 1px side pad). Returns x after badge."""
+    pad = 1
+    ink = max(1, pf.text_ink_width(text, size="tiny"))
+    bw = ink + pad * 2
+    draw.rectangle([x, y, x + bw - 1, y + 4], fill=fill, outline=fill)
+    pf.draw_tiny(img, x + pad, y, text, (0, 0, 0))
+    return x + bw
+
+
+def _draw_sum_wi_lan_row(
+    img,
+    draw: ImageDraw.ImageDraw,
+    m: dict[str, Any],
+    *,
+    x0: int,
+    x1: int,
+    y: int,
+) -> None:
+    """Wi wifi/total …… LAN1234 — Wi on orange, LAN on green (black text)."""
+    clients = int(m.get("clients", 0) or 0)
+    wifi = int(m.get("clients_wifi", 0) or 0)
+    ports = list(m.get("lan_ports") or [False, False, False, False])[:4]
+    while len(ports) < 4:
+        ports.append(False)
+
+    x = _draw_sum_inv_lab(img, draw, x0, y, "Wi", ORANGE)
+    x += 1
+    x = _txt(img, x, y, str(wifi), DIM if wifi == 0 else FG, size="tiny", role="status")
+    x = _txt(img, x, y, "/", HEADER, size="tiny", role="status")
+    _txt(img, x, y, str(clients), DIM if clients == 0 else FG, size="tiny", role="status")
+
+    lan_bw = max(1, pf.text_ink_width("LAN", size="tiny")) + 2
+    dig_span = pf.text_width("123", size="tiny") + pf.text_ink_width("4", size="tiny")
+    lx = x1 - (lan_bw + dig_span) + 1
+    lx = _draw_sum_inv_lab(img, draw, lx, y, "LAN", GREEN)
+    for i, up in enumerate(ports, start=1):
+        lx = _txt(img, lx, y, str(i), GREEN if up else RED, size="tiny", role="status")
+
+
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     """Full-bleed summary: DWN first; 2 top hosts; footer time/uptime/date inverted."""
     sys_hp = _system_health_score(m)
@@ -1338,7 +1385,11 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _draw_rate(img, ux, y, up, color=up_col)
     y += step
 
-    # 2–3) slots 0–3: SYS/NET+CPU/RAM — slots 4–7 (graph): DOWN/UP WiFi|Wired bars
+    # 2) Wi wifi/total …… LAN1234 (moved up; inverted Wi/LAN labels)
+    _draw_sum_wi_lan_row(img, d, m, x0=x0, x1=x1, y=y)
+    y += step
+
+    # 3–4) slots 0–3: SYS/NET+CPU/RAM — slots 4–7 (graph): DOWN/UP WiFi|Wired bars
     show_wan_graph = sum_show_wan_graph()
     cpu = float(m.get("cpu", 0) or 0)
     ram = float(m.get("ram", 0) or 0)
@@ -1381,7 +1432,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         _label_trend_gauge(lab_r, "RAM", tr_ram, ram, ram_col, alert=ram_alert, g_x0=g_r, g_w0=g_w_r)
         y += step
 
-    # 4) DSK % …… TMP↑ °C — TMP label at same lab_r as NET/RAM
+    # 5) DSK % …… TMP↑ °C — TMP label at same lab_r as NET/RAM
     dsk_col = _diagram_color(disk, kind="disk")
     tmp_i = int(round(tmp))
     tmp_hot = _is_crit_temp_tile(tmp_i)
@@ -1413,25 +1464,6 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     bx = max(bx, content_r)  # keep value column aligned with NET/RAM gauges
     bx += 2
     _draw_val_unit(img, bx, y, tmp_num, "°C", tmp_col, size="tiny", value_role="status")
-    y += step
-
-    # 5) Wi 15/17 …… LAN1234 (LAN flush-right → "4" ink on last pixel)
-    clients = int(m.get("clients", 0) or 0)
-    wifi = int(m.get("clients_wifi", 0) or 0)
-    ports = list(m.get("lan_ports") or [False, False, False, False])[:4]
-    while len(ports) < 4:
-        ports.append(False)
-    x = x0
-    x = _txt(img, x, y, "Wi", LABEL, size="tiny", role="label")
-    x += 1
-    x = _txt(img, x, y, str(wifi), DIM if wifi == 0 else FG, size="tiny", role="status")
-    x = _txt(img, x, y, "/", HEADER, size="tiny", role="status")
-    x = _txt(img, x, y, str(clients), DIM if clients == 0 else FG, size="tiny", role="status")
-    lan_ink = pf.text_ink_width("LAN1234", size="tiny")
-    lx = x1 - lan_ink + 1
-    lx = _txt(img, lx, y, "LAN", LABEL, size="tiny", role="label")
-    for i, up in enumerate(ports, start=1):
-        lx = _txt(img, lx, y, str(i), GREEN if up else RED, size="tiny", role="status")
     y += step
 
     # 6) VPN123 …… USB23
