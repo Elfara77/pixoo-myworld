@@ -92,7 +92,7 @@ _NET_SAT_SMOOTH: float | None = None
 _SYS_HP_HIST: list[float] = []
 _NET_SAT_HIST: list[float] = []
 # SUM dwell D split into 8 equal slots (Σ=D):
-# 0–3 clients (4/8); 4–7 WAN graph (4/8) with UP on 4–5 and DWN on 6–7.
+# 0–3 clients (4/8); 4–7 WAN graph (4/8) with DOWN|UP legend above the plot.
 _SUM_DWELL_T0 = 0.0
 _SUM_DWELL_D = 1.0
 
@@ -116,11 +116,6 @@ def sum_phase() -> int:
 def sum_show_wan_graph() -> bool:
     """True for the last 4/8 of the SUM dwell (graph window)."""
     return sum_phase() >= 4
-
-
-def sum_graph_label_up() -> bool:
-    """True for first half of graph window (UP); False → DWN."""
-    return sum_phase() < 6
 
 
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
@@ -1262,24 +1257,54 @@ def _draw_sum_footer(img, draw: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     pf.draw_tiny(img, date_x, text_y, date_s, black)
 
 
-def _draw_sum_graph_dir_badge(
+def _draw_sum_vpn_usb_row(
     img,
     draw: ImageDraw.ImageDraw,
-    x: int,
-    y: int,
+    m: dict[str, Any],
     *,
-    show_up: bool,
+    x0: int,
+    x1: int,
+    y: int,
 ) -> None:
-    """Left DWN/UP badge on SUM WAN graph: 1px padded pill, color fill, black text."""
-    lab = "UP" if show_up else "DWN"
-    fill = GRAPH_UP if show_up else GRAPH_DOWN
-    pad = 1
-    ink = max(1, pf.text_ink_width(lab, size="tiny"))
-    # 1px frame around 5px tiny glyphs → 7px tall, like the SUM footer band.
-    bw = ink + pad * 2
-    bh = 5 + pad * 2
-    draw.rectangle([x, y, x + bw - 1, y + bh - 1], fill=fill, outline=fill)
-    pf.draw_tiny(img, x + pad, y + pad, lab, (0, 0, 0))
+    """VPN123 … [5G]n … USB23 — 5G badge fixed mid (black on orange like Wi)."""
+    x = x0
+    x = _txt(img, x, y, "VPN", LABEL, size="tiny", role="label")
+    for i, (_name, on, _typ) in enumerate(_vpn_slots(m)[:3], start=1):
+        x = _txt(img, x, y, str(i), GREEN if on else RED, size="tiny", role="status")
+
+    n5 = max(0, int(m.get("clients_5g", 0) or 0))
+    cnt = str(min(99, n5))
+    five_bw = max(1, pf.text_ink_width("5G", size="tiny")) + 2
+    mid_w = five_bw + 1 + pf.text_ink_width(cnt, size="tiny")
+    # Fixed screen-centered cluster so it does not shift with VPN/USB widths.
+    mx = max(x0, (x0 + x1 - mid_w + 1) // 2)
+    mx = _draw_sum_inv_lab(img, draw, mx, y, "5G", ORANGE)
+    _txt(img, mx + 1, y, cnt, DIM if n5 == 0 else FG, size="tiny", role="status")
+
+    usb2 = m.get("usb2") or {}
+    usb3 = m.get("usb3") or {}
+    usb = m.get("usb") or {}
+    u2 = bool(usb2.get("present") or usb.get("present"))
+    u3 = bool(usb3.get("present"))
+    usb_ink = pf.text_ink_width("USB23", size="tiny")
+    ux = x1 - usb_ink + 1
+    ux = _txt(img, ux, y, "USB", LABEL, size="tiny", role="label")
+    ux = _txt(img, ux, y, "2", GREEN if u2 else RED, size="tiny", role="status")
+    _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
+
+
+def _draw_sum_down_up_legend_row(
+    img,
+    draw: ImageDraw.ImageDraw,
+    *,
+    x0: int,
+    x1: int,
+    y: int,
+) -> None:
+    """DOWN (left) + UP (right) inverted badges — legend for the WAN graph below."""
+    _draw_sum_inv_lab(img, draw, x0, y, "DOWN", GRAPH_DOWN)
+    up_bw = max(1, pf.text_ink_width("UP", size="tiny")) + 2
+    _draw_sum_inv_lab(img, draw, x1 - up_bw + 1, y, "UP", GRAPH_UP)
 
 
 def _draw_sum_inv_lab(
@@ -1467,25 +1492,14 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _draw_val_unit(img, bx, y, tmp_num, "°C", tmp_col, size="tiny", value_role="status")
     y += step
 
-    # 6) VPN123 …… USB23
-    x = x0
-    x = _txt(img, x, y, "VPN", LABEL, size="tiny", role="label")
-    for i, (_name, on, _typ) in enumerate(_vpn_slots(m)[:3], start=1):
-        x = _txt(img, x, y, str(i), GREEN if on else RED, size="tiny", role="status")
-    usb2 = m.get("usb2") or {}
-    usb3 = m.get("usb3") or {}
-    usb = m.get("usb") or {}
-    u2 = bool(usb2.get("present") or usb.get("present"))
-    u3 = bool(usb3.get("present"))
-    usb_ink = pf.text_ink_width("USB23", size="tiny")
-    ux = x1 - usb_ink + 1
-    ux = _txt(img, ux, y, "USB", LABEL, size="tiny", role="label")
-    ux = _txt(img, ux, y, "2", GREEN if u2 else RED, size="tiny", role="status")
-    _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
+    # 6) Graph: DOWN……UP legend | Clients: VPN … 5Gn … USB
+    if show_wan_graph:
+        _draw_sum_down_up_legend_row(img, d, x0=x0, x1=x1, y=y)
+    else:
+        _draw_sum_vpn_usb_row(img, d, m, x0=x0, x1=x1, y=y)
     y += step
 
     # 7–8) Hot Wifi + tops  XOR  WAN graph — graph = last 4/8 of dwell D.
-    # Graph labels: UP then DWN, half each (see sum_graph_label_up).
     block_y0 = y
     block_h = step * 3 - 1  # 17px — three tiny rows
     if show_wan_graph:
@@ -1504,8 +1518,6 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             GRAPH_UP,
             fill_down=True,
         )
-        # Same left spot: UP first half of graph window, DWN second half.
-        _draw_sum_graph_dir_badge(img, d, x0, block_y0, show_up=sum_graph_label_up())
         y = block_y0 + step * 3
     else:
         # Hot Wifi n …… down_rate up_rate (hottest Wi‑Fi STA)
