@@ -56,6 +56,7 @@ exec "${PYTHON}" -m pixoo_bridge \
   --alert-blink "${PIXOO_ALERT_BLINK:-1}" \
   --blink-period "${PIXOO_BLINK_PERIOD:-0.55}" \
   --rate-style "${PIXOO_RATE_STYLE:-short}" \
+  --time-12h "${PIXOO_TIME_12H:-0}" \
   --wlc-graph-mode "${PIXOO_WLC_GRAPH_MODE:-overlay}" \
   --wan-max-down "${PIXOO_WAN_MAX_DOWN_MBPS:-190}" \
   --wan-max-up "${PIXOO_WAN_MAX_UP_MBPS:-12}" \

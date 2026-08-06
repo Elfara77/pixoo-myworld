@@ -243,6 +243,11 @@ def main(argv: list[str] | None = None) -> int:
         help="short=K/M/G · long=Kb/s|Mb/s|Gb/s",
     )
     ap.add_argument(
+        "--time-12h",
+        default=env.get("PIXOO_TIME_12H", "0"),
+        help="1/0 — SUM footer 12h clock (AM black/white, PM white/black); 0=24h",
+    )
+    ap.add_argument(
         "--screens",
         default=env.get("PIXOO_SCREENS", "all"),
         help="Active screens: all (no SUM), all,SUM, SUM alone, or SYS,LOD,...",
@@ -262,6 +267,7 @@ def main(argv: list[str] | None = None) -> int:
     scroll_on = str(args.text_scroll).strip().lower() in ("1", "true", "yes", "on")
     blink_on = str(args.alert_blink).strip().lower() in ("1", "true", "yes", "on")
     heavy_dwell = str(args.heavy_screen_dwell).strip().lower() in ("1", "true", "yes", "on")
+    time_12h = str(args.time_12h).strip().lower() in ("1", "true", "yes", "on", "12", "12h")
     set_render_options(
         color_mode=args.color_mode,
         text_scroll=scroll_on,
@@ -274,13 +280,14 @@ def main(argv: list[str] | None = None) -> int:
         wlc_graph_mode=args.wlc_graph_mode,
         wan_max_down_mbps=args.wan_max_down,
         wan_max_up_mbps=args.wan_max_up,
+        time_12h=time_12h,
     )
     screens = get_screen_ids()
 
     _setup_logging(args.log)
     snapshot_path = _resolve_snapshot_path(args.snapshot_path, args.log)
     LOG.info(
-        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s heavy_dwell=%s heavy_x=%s wlc_graph=%s wan_max=%.0f/%.0f frame_s=%s color=%s scroll=%s blink=%s rate=%s screens=%s snapshot=%s",
+        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s heavy_dwell=%s heavy_x=%s wlc_graph=%s wan_max=%.0f/%.0f frame_s=%s color=%s scroll=%s blink=%s rate=%s time12h=%s screens=%s snapshot=%s",
         args.pixoo,
         args.metrics,
         args.demo,
@@ -296,6 +303,7 @@ def main(argv: list[str] | None = None) -> int:
         scroll_on,
         blink_on,
         args.rate_style,
+        time_12h,
         ",".join(screens),
         str(snapshot_path) if snapshot_path else "-",
     )

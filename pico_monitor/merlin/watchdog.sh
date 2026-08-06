@@ -162,6 +162,7 @@ start_bridge() {
   ALERT_BLINK="${PIXOO_ALERT_BLINK:-1}"
   BLINK_PERIOD="${PIXOO_BLINK_PERIOD:-0.55}"
   RATE_STYLE="${PIXOO_RATE_STYLE:-short}"
+  TIME_12H="${PIXOO_TIME_12H:-0}"
   WLC_GRAPH="${PIXOO_WLC_GRAPH_MODE:-overlay}"
   WAN_MAX_DOWN="${PIXOO_WAN_MAX_DOWN_MBPS:-190}"
   WAN_MAX_UP="${PIXOO_WAN_MAX_UP_MBPS:-12}"
@@ -183,6 +184,7 @@ start_bridge() {
     --alert-blink "${ALERT_BLINK}" \
     --blink-period "${BLINK_PERIOD}" \
     --rate-style "${RATE_STYLE}" \
+    --time-12h "${TIME_12H}" \
     --wlc-graph-mode "${WLC_GRAPH}" \
     --wan-max-down "${WAN_MAX_DOWN}" \
     --wan-max-up "${WAN_MAX_UP}" \
@@ -190,7 +192,7 @@ start_bridge() {
     --snapshot-path "${RUN_DIR}/pixoo_last.png" \
     >> "${BRIDGE_LOG}" 2>&1 &
   echo $! > "${BRIDGE_PIDFILE}"
-  log_bridge "started bridge pid=$(cat "${BRIDGE_PIDFILE}") pixoo=${PIXOO_IP} metrics=${METRICS_URL} color=${COLOR_MODE} blink=${ALERT_BLINK} rate=${RATE_STYLE} heavy=${HEAVY_DWELL}x${HEAVY_MULT} wlc_graph=${WLC_GRAPH} screens=${SCREENS}"
+  log_bridge "started bridge pid=$(cat "${BRIDGE_PIDFILE}") pixoo=${PIXOO_IP} metrics=${METRICS_URL} color=${COLOR_MODE} blink=${ALERT_BLINK} rate=${RATE_STYLE} time12h=${TIME_12H} heavy=${HEAVY_DWELL}x${HEAVY_MULT} wlc_graph=${WLC_GRAPH} screens=${SCREENS}"
   ln -sf "${BRIDGE_LOG}" "${BRIDGE_LOG_TMP}" 2>/dev/null || \
     cp -f "${BRIDGE_LOG}" "${BRIDGE_LOG_TMP}" 2>/dev/null || true
   echo "bridge started pid=$(cat "${BRIDGE_PIDFILE}") → Pixoo ${PIXOO_IP}"

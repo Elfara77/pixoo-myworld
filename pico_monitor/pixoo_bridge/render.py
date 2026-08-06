@@ -77,6 +77,8 @@ CRIT_DISK = 90.0
 WARN_DISK = 70.0
 
 _RATE_STYLE = "short"
+# Footer clock: False = 24h black-on-white; True = 12h (AM black/white, PM white/black).
+_TIME_12H = False
 # WLC WiFi/Eth + GRP WAN graphs: overlay = down+up same panel; split = down left, up right.
 _WLC_GRAPH_MODE = "overlay"
 
@@ -161,6 +163,19 @@ def sum_show_wan_graph() -> bool:
     return _SUM_SHOW_WAN_GRAPH
 
 
+def _sum_face_blink_on() -> bool:
+    """One on/off cycle per SUM face (clients + graph) → 2 blinks per dwell."""
+    if not _ALERT_BLINK:
+        return True
+    # 4 phase slots per face; visible for the first half of each face.
+    return (_SUM_PHASE % 4) < 2
+
+
+def _sum_empty_blink_show() -> bool:
+    """Whether empty Wi/LAN/5G chrome is visible this frame (face-synced blink)."""
+    return not _ALERT_BLINK or _sum_face_blink_on()
+
+
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
 HEAVY_SCREEN_IDS = frozenset({"LOD", "GRP", "WLC", "TOP", "CLI", "TMP", "SUM", "SUM_GRAPH"})
 _HEAVY_DWELL = True
@@ -218,10 +233,11 @@ def set_render_options(
     wlc_graph_mode: str | None = None,
     wan_max_down_mbps: float | None = None,
     wan_max_up_mbps: float | None = None,
+    time_12h: bool | None = None,
 ) -> None:
     global _COLOR_MODE, _TEXT_SCROLL, _ALERT_BLINK, _BLINK_PERIOD_S, _RATE_STYLE
     global _HEAVY_DWELL, _HEAVY_DWELL_MULT, _WLC_GRAPH_MODE
-    global _WAN_MAX_DOWN_MBPS, _WAN_MAX_UP_MBPS
+    global _WAN_MAX_DOWN_MBPS, _WAN_MAX_UP_MBPS, _TIME_12H
     if color_mode is not None:
         mode = color_mode.strip().lower()
         if mode in ("mono", "monochrome", "bw"):
@@ -255,6 +271,8 @@ def set_render_options(
         _WAN_MAX_DOWN_MBPS = max(0.1, float(wan_max_down_mbps))
     if wan_max_up_mbps is not None:
         _WAN_MAX_UP_MBPS = max(0.1, float(wan_max_up_mbps))
+    if time_12h is not None:
+        _TIME_12H = bool(time_12h)
 
 
 def _blink_on() -> bool:
@@ -1673,8 +1691,21 @@ def _score_hist_push(buf: list[float], val: float, *, keep: int = 4, min_delta: 
     del buf[:-keep]
 
 
+def _footer_clock(now) -> tuple[str, bool, bool]:
+    """Return ``(time_str, is_12h, is_pm)`` for the SUM footer clock."""
+    if not _TIME_12H:
+        return now.strftime("%H:%M"), False, False
+    h = int(now.hour)
+    is_pm = h >= 12
+    h12 = h % 12 or 12
+    return f"{h12}:{now.minute:02d}", True, is_pm
+
+
 def _draw_sum_footer(img, draw: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """Bottom 7px band (1+5+1): continuous accent fill, black 3×5 with 1px margins."""
+    """Bottom 7px band (1+5+1): continuous accent fill, black 3×5 with 1px margins.
+
+    Clock: 24h = black on white; 12h AM = black on white; 12h PM = white on black.
+    """
     from datetime import datetime
 
     band_h = 7  # 1px top + 5px glyph + 1px bottom
@@ -1682,9 +1713,10 @@ def _draw_sum_footer(img, draw: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     text_y = band_y0 + 1
     margin = 1
     x_right = 63
+    black = (0, 0, 0)
 
     now = datetime.now()
-    time_s = now.strftime("%H:%M")
+    time_s, is_12h, is_pm = _footer_clock(now)
     date_s = now.strftime("%d/%m")
     online = bool(m.get("wan_online"))
     mid = "WAN" if not online else _compact_uptime_str(str(m.get("uptime_str", "--") or "--"))
@@ -1694,14 +1726,22 @@ def _draw_sum_footer(img, draw: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     time_x = margin
     # Date last ink on x=62 → 1px right margin on column 63
     date_x = x_right - margin - date_ink + 1
+    # Time cell ends before mid accent (1px white/black pad after last ink).
+    time_cell_x1 = time_x + time_ink  # inclusive pad column before mid
 
     # Continuous band: white full width, then mid accent over the center span.
     draw.rectangle([0, band_y0, x_right, 63], fill=FG, outline=FG)
-    # 1px white pad after time ink, 1px white pad before date ink; mid fills the rest.
-    mid_x0 = time_x + time_ink + 1
+    # 12h PM: invert the time cell (white glyphs on black).
+    if is_12h and is_pm:
+        draw.rectangle([0, band_y0, time_cell_x1, 63], fill=black, outline=black)
+
+    # 1px pad after time cell, 1px white pad before date ink; mid fills the rest.
+    mid_x0 = time_cell_x1 + 1
     mid_x1 = date_x - 2
+    # WAN offline: 1 blink per SUM face (text half + graph half) = 2 / dwell.
+    wan_alert_on = online or not _ALERT_BLINK or _sum_face_blink_on()
     mid_col = GREEN if online else RED
-    if mid_x1 >= mid_x0:
+    if mid_x1 >= mid_x0 and (online or wan_alert_on):
         draw.rectangle([mid_x0, band_y0, mid_x1, 63], fill=mid_col, outline=mid_col)
 
     # Mid text centered in the accent span (1px inset from band edges when possible).
@@ -1716,9 +1756,9 @@ def _draw_sum_footer(img, draw: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         if band_inner >= mid_ink:
             mid_text_x = mid_x0 + 1 + max(0, (band_inner - mid_ink) // 2)
 
-    black = (0, 0, 0)
-    pf.draw_tiny(img, time_x, text_y, time_s, black)
-    show_mid = bool(mid) and (online or not _ALERT_BLINK or _blink_on())
+    time_col = FG if (is_12h and is_pm) else black
+    pf.draw_tiny(img, time_x, text_y, time_s, time_col)
+    show_mid = bool(mid) and wan_alert_on
     if show_mid:
         pf.draw_tiny(img, mid_text_x, text_y, mid, black)
     pf.draw_tiny(img, date_x, text_y, date_s, black)
@@ -1733,11 +1773,18 @@ def _draw_sum_vpn_usb_row(
     x1: int,
     y: int,
 ) -> None:
-    """VPN123 … [5G]n … USB23 — 5G badge centered last so it stays visible."""
+    """VPN123 … [5G]n … USB23 — 5G badge centered last so it stays visible.
+
+    Empty alerts (face-synced blink): VPN if none up; USB if neither port present;
+    5G if no 5 GHz clients.
+    """
     x = x0
-    x = _txt(img, x, y, "VPN", LABEL, size="tiny", role="label")
-    for i, (_name, on, _typ) in enumerate(_vpn_slots(m)[:3], start=1):
-        x = _txt(img, x, y, str(i), GREEN if on else RED, size="tiny", role="status")
+    slots = _vpn_slots(m)[:3]
+    any_vpn = any(bool(on) for _name, on, _typ in slots)
+    if any_vpn or _sum_empty_blink_show():
+        x = _txt(img, x, y, "VPN", LABEL, size="tiny", role="label")
+        for i, (_name, on, _typ) in enumerate(slots, start=1):
+            x = _txt(img, x, y, str(i), GREEN if on else RED, size="tiny", role="status")
 
     usb2 = m.get("usb2") or {}
     usb3 = m.get("usb3") or {}
@@ -1746,20 +1793,23 @@ def _draw_sum_vpn_usb_row(
     u3 = bool(usb3.get("present"))
     usb_ink = pf.text_ink_width("USB23", size="tiny")
     ux = x1 - usb_ink + 1
-    ux = _txt(img, ux, y, "USB", LABEL, size="tiny", role="label")
-    ux = _txt(img, ux, y, "2", GREEN if u2 else RED, size="tiny", role="status")
-    _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
+    if u2 or u3 or _sum_empty_blink_show():
+        ux = _txt(img, ux, y, "USB", LABEL, size="tiny", role="label")
+        ux = _txt(img, ux, y, "2", GREEN if u2 else RED, size="tiny", role="status")
+        _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
 
     # Mid 5GHz count drawn last (inverted badge) so VPN/USB cannot cover it.
+    # Blink (WIFI color) when no 5 GHz clients — same face cadence as WAN/Wi/LAN.
     n5 = max(0, int(m.get("clients_5g", 0) or 0))
-    cnt = str(min(99, n5))
-    five_bw = max(1, pf.text_ink_width("5G", size="tiny")) + 2
-    mid_w = five_bw + 1 + pf.text_ink_width(cnt, size="tiny")
-    mx = max(x0, (x0 + x1 - mid_w + 1) // 2)
-    # Keep clear of VPN ink on the left when possible.
-    mx = max(mx, x + 2)
-    mx = _draw_sum_inv_lab(img, draw, mx, y, "5G", WIFI)
-    _txt(img, mx + 1, y, cnt, DIM if n5 == 0 else WIFI, size="tiny", role="status")
+    if n5 > 0 or _sum_empty_blink_show():
+        cnt = str(min(99, n5))
+        five_bw = max(1, pf.text_ink_width("5G", size="tiny")) + 2
+        mid_w = five_bw + 1 + pf.text_ink_width(cnt, size="tiny")
+        mx = max(x0, (x0 + x1 - mid_w + 1) // 2)
+        # Keep clear of VPN ink on the left when possible.
+        mx = max(mx, x + 2)
+        mx = _draw_sum_inv_lab(img, draw, mx, y, "5G", WIFI)
+        _txt(img, mx + 1, y, cnt, WIFI, size="tiny", role="status")
 
 
 def _draw_sum_down_up_legend_row(
@@ -1807,25 +1857,35 @@ def _draw_sum_wi_lan_row(
     x1: int,
     y: int,
 ) -> None:
-    """Wi wifi/total …… LAN1234 — Wi lime, LAN violet; port digits green/red."""
+    """Wi wifi/total …… LAN1234 — Wi lime, LAN violet; port digits green/red.
+
+    Empty alerts (face-synced blink): Wi if no 2.4 GHz clients; LAN if no port link.
+    """
     clients = int(m.get("clients", 0) or 0)
     wifi = int(m.get("clients_wifi", 0) or 0)
+    n2 = int(m.get("clients_2g", 0) or 0)
     ports = list(m.get("lan_ports") or [False, False, False, False])[:4]
     while len(ports) < 4:
         ports.append(False)
 
-    x = _draw_sum_inv_lab(img, draw, x0, y, "Wi", WIFI)
-    x += 1
-    x = _txt(img, x, y, str(wifi), DIM if wifi == 0 else WIFI, size="tiny", role="status")
-    x = _txt(img, x, y, "/", WIFI, size="tiny", role="status")
-    _txt(img, x, y, str(clients), DIM if clients == 0 else WIFI, size="tiny", role="status")
+    # Wi chrome blinks when no 2.4 GHz clients.
+    if n2 > 0 or _sum_empty_blink_show():
+        x = _draw_sum_inv_lab(img, draw, x0, y, "Wi", WIFI)
+        x += 1
+        x = _txt(img, x, y, str(wifi), WIFI, size="tiny", role="status")
+        x = _txt(img, x, y, "/", WIFI, size="tiny", role="status")
+        _txt(img, x, y, str(clients), WIFI, size="tiny", role="status")
 
+    # LAN badge blinks when nothing linked; port status digits always shown.
+    lan_empty = not any(ports)
     lan_bw = max(1, pf.text_ink_width("LAN", size="tiny")) + 2
     dig_span = pf.text_width("123", size="tiny") + pf.text_ink_width("4", size="tiny")
     lx = x1 - (lan_bw + dig_span) + 1
-    lx = _draw_sum_inv_lab(img, draw, lx, y, "LAN", LAN)
+    if (not lan_empty) or _sum_empty_blink_show():
+        _draw_sum_inv_lab(img, draw, lx, y, "LAN", LAN)
+    dx = lx + lan_bw
     for i, up in enumerate(ports, start=1):
-        lx = _txt(img, lx, y, str(i), GREEN if up else RED, size="tiny", role="status")
+        dx = _txt(img, dx, y, str(i), GREEN if up else RED, size="tiny", role="status")
 
 
 def _draw_sum_dsk_tmp_row(

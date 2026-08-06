@@ -40,6 +40,7 @@ cd pico_monitor
 | `PIXOO_ALERT_BLINK` / `--alert-blink` | `1` | Blink critical text/gauge fills (CPU/RAM≥90, temps, disk≥90, WAN off) |
 | `PIXOO_BLINK_PERIOD` / `--blink-period` | `0.55` | Half-cycle seconds (~1 Hz full blink with default frame interval) |
 | `PIXOO_RATE_STYLE` / `--rate-style` | `short` | `short`=K/M/G · `long`=Kb/s\|Mb/s\|Gb/s |
+| `PIXOO_TIME_12H` / `--time-12h` | `0` | `0`=footer SUM 24h · `1`=12h (AM noir/blanc · PM blanc/noir) |
 | `PIXOO_SCREEN_SECONDS` / `--screen-seconds` | `8` | Temps de base par écran (rotation) |
 | `PIXOO_HEAVY_SCREEN_DWELL` / `--heavy-screen-dwell` | `1` | `1` = LOD/TMP/GRP/WLC/TOP/CLI restent ×2 plus longtemps ; `0` = même durée pour tous |
 | `PIXOO_HEAVY_SCREEN_MULTIPLIER` / `--heavy-screen-multiplier` | `2` | Multiplicateur sur les écrans « lourds » (graphes, listes) |
