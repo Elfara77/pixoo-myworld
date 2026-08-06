@@ -80,19 +80,94 @@ def _sum_ifaces_bytes(ifaces: list[str]) -> tuple[int, int]:
     return (rx, tx) if seen else (0, 0)
 
 
-def _wifi_lan_ifaces() -> tuple[list[str], list[str]]:
-    """Return (wifi_ifaces wl*, wired_lan physical ports — not br0)."""
-    wan = _wan_iface()
-    wifi: list[str] = []
+def _iface_lifetime_bytes(iface: str) -> int:
+    p = Path(f"/sys/class/net/{iface}/statistics")
+    if not p.is_dir():
+        return 0
+    try:
+        return int((p / "rx_bytes").read_text()) + int((p / "tx_bytes").read_text())
+    except (OSError, ValueError):
+        return 0
+
+
+def _wifi_radio_ifaces() -> list[str]:
+    """Merlin Wi‑Fi radios + guest VIFs for byte-rate accounting.
+
+    Asus HND maps ``wl0_ifname=eth6``, ``wl1_ifname=eth7``. Guest nets are
+    ``wl0.1``… On Broadcom, a parent with non-zero counters usually already
+    includes BSS/VIF traffic — summing parent+VIFs double-counts. When the
+    parent stays at 0 (common for 2.4 GHz), count the VIFs instead.
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+    claimed: set[str] = set()
+
+    def add(name: str | None) -> None:
+        n = (name or "").strip()
+        if not n or n in seen:
+            return
+        if not Path(f"/sys/class/net/{n}").is_dir():
+            return
+        seen.add(n)
+        found.append(n)
+
+    for unit in range(0, 4):
+        parent = (_nvram(f"wl{unit}_ifname") or "").strip()
+        vifs: list[str] = []
+        vseen: set[str] = set()
+        for part in (_nvram(f"wl{unit}_vifs") or "").split():
+            p = part.strip()
+            if p and p not in vseen:
+                vseen.add(p)
+                vifs.append(p)
+        for g in range(1, 4):
+            gif = (_nvram(f"wl{unit}.{g}_ifname") or "").strip()
+            if gif and gif not in vseen:
+                vseen.add(gif)
+                vifs.append(gif)
+            virt = f"wl{unit}.{g}"
+            if virt not in vseen:
+                vseen.add(virt)
+                vifs.append(virt)
+        vifs = [v for v in vifs if Path(f"/sys/class/net/{v}").is_dir()]
+        parent_ok = bool(parent) and Path(f"/sys/class/net/{parent}").is_dir()
+        p_bytes = _iface_lifetime_bytes(parent) if parent_ok else 0
+
+        if parent_ok and p_bytes > 0:
+            # Parent aggregates this radio — do not also sum its VIFs.
+            add(parent)
+            claimed.add(parent)
+            claimed.update(vifs)
+        else:
+            for v in vifs:
+                add(v)
+                claimed.add(v)
+            if parent_ok:
+                add(parent)
+                claimed.add(parent)
+
+    for part in (_nvram("wl_ifnames") or "").split():
+        if part.strip() not in claimed:
+            add(part)
     net = Path("/sys/class/net")
     if net.is_dir():
         for p in sorted(net.iterdir()):
-            name = p.name
-            if name.startswith("wl"):
-                wifi.append(name)
+            if p.name.startswith("wl") and p.name not in claimed:
+                add(p.name)
+    return found
+
+
+def _wifi_lan_ifaces() -> tuple[list[str], list[str]]:
+    """Return (wifi_ifaces, wired_lan physical ports — not br0 / not radios)."""
+    wan = _wan_iface()
+    wifi = _wifi_radio_ifaces()
     wifi_set = set(wifi)
     wired: list[str] = []
-    for iface in ("lan1", "lan2", "lan3", "lan4", "eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7"):
+    # Prefer Merlin switch port names when present; else eth* minus radios/WAN.
+    port_names = [f"lan{i}" for i in range(1, 9)]
+    if not any(Path(f"/sys/class/net/{n}").is_dir() for n in port_names):
+        port_names = [f"eth{i}" for i in range(1, 9)]
+    for iface in port_names:
         if iface == wan or iface in wifi_set:
             continue
         if Path(f"/sys/class/net/{iface}").is_dir():
@@ -495,11 +570,21 @@ def _top_clients_wifi(now: float) -> tuple[list, list]:
     """Best-effort top down/up from wl sta_info (capped). Rates in Mbps."""
     rates = []
     n = 0
-    for iface in ("eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7", "wl0", "wl1", "wl2"):
+    # Radios + guest VIFs (eth6/eth7 and wl0.1…); fall back to a fixed list.
+    ifaces = _wifi_radio_ifaces() or [
+        "eth1", "eth2", "eth3", "eth4", "eth5", "eth6", "eth7",
+        "wl0", "wl1", "wl2", "wl0.1", "wl0.2", "wl1.1", "wl1.2",
+    ]
+    seen_mac: set[str] = set()
+    for iface in ifaces:
         assoc = _run(f"wl -i {iface} assoclist 2>/dev/null")
         for mac in re.findall(r"(?i)([0-9a-f:]{17})", assoc):
+            ml = mac.lower()
+            if ml in seen_mac:
+                continue
             if n >= 12:
                 break
+            seen_mac.add(ml)
             n += 1
             out = _run(f"wl -i {iface} sta_info {mac} 2>/dev/null", timeout=2.0)
             rx = tx = None
@@ -516,8 +601,8 @@ def _top_clients_wifi(now: float) -> tuple[list, list]:
                 continue
             rx = rx or 0
             tx = tx or 0
-            prev = _prev_sta.get(mac)
-            _prev_sta[mac] = (now, rx, tx)
+            prev = _prev_sta.get(ml)
+            _prev_sta[ml] = (now, rx, tx)
             if prev:
                 pts, prx, ptx = prev
                 dt = max(0.001, now - pts)

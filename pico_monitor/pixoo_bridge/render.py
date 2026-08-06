@@ -1072,12 +1072,16 @@ def _first_top(rows: list | None) -> tuple[str, float] | None:
         return None
 
 
-# Hot-line spike detection (SUM clients half).
+# Hot-line activity (SUM clients half).
+# Detect sustained high rate OR spike-above-baseline — a long download must
+# stay Hot after the rolling baseline catches up to the plateau.
 _HOT_BASELINE_N = 10
-_HOT_THRESH_MBPS = 10.0  # real spike
-_HOT_CLIENT_SHARE = 0.5  # top1 must cover ≥50% of surplus to be "the" culprit
+_HOT_THRESH_MBPS = 10.0  # enter Hot (spike or absolute)
+_HOT_CLEAR_MBPS = 5.0  # leave Hot only below this (hysteresis)
+_HOT_CLIENT_SHARE = 0.5  # top1 must cover ≥50% of WiFi rate to be named
 _HOT_MULTI_CLIENT_MBPS = 5.0  # count clients above this for multi line
-_HOT_LAN_DOMINATES = 0.3  # wifi surplus < lan * this → LAN-solo
+_HOT_LAN_DOMINATES = 0.3  # other side < this × dominant → solo
+_hot_hold: dict[str, Any] = {"label": "Hot --", "act": 0.0}
 
 
 def format_hot_bitrate(mbps: float) -> str:
@@ -1131,18 +1135,27 @@ def _hot_surplus(history: Any, current: float | None, *, n: int = _HOT_BASELINE_
     return max(0.0, current - base)
 
 
+def _hot_activity(history: Any, current: float | None, *, n: int = _HOT_BASELINE_N) -> float:
+    """Heat score: spike surplus or absolute sustained rate (whichever larger)."""
+    try:
+        cur = float(current or 0)
+    except (TypeError, ValueError):
+        cur = 0.0
+    return max(_hot_surplus(history, cur, n=n), cur)
+
+
 def _hot_best_side(
     hist_down: Any,
     hist_up: Any,
     cur_down: float,
     cur_up: float,
 ) -> tuple[float, str, float]:
-    """Return (surplus, 'D'|'U', current_on_that_side)."""
-    sd = _hot_surplus(hist_down, cur_down)
-    su = _hot_surplus(hist_up, cur_up)
-    if sd >= su:
-        return sd, "D", float(cur_down or 0)
-    return su, "U", float(cur_up or 0)
+    """Return (activity, 'D'|'U', current_on_that_side)."""
+    ad = _hot_activity(hist_down, cur_down)
+    au = _hot_activity(hist_up, cur_up)
+    if ad >= au:
+        return ad, "D", float(cur_down or 0)
+    return au, "U", float(cur_up or 0)
 
 
 def _hot_parse_tops(rows: Any, *, typ: str | None = "wifi") -> list[tuple[str, float]]:
@@ -1170,23 +1183,24 @@ def _hot_parse_tops(rows: Any, *, typ: str | None = "wifi") -> list[tuple[str, f
 
 
 def compute_hot_label(m: dict[str, Any]) -> str:
-    """Spike-above-baseline Hot line for SUM (WiFi / LAN / mix / multi / idle).
+    """Hot line for SUM: sustained high rate and/or spike-above-baseline.
 
-    Uses existing ``wifi_*`` / ``lan_*`` histories + ``top_down``/``top_up``
-    (WiFi STA today; dicts with ``type`` accepted if present later).
+    Side split from ``wifi_*`` / ``lan_*``. WiFi STA names from ``top_*`` may
+    only claim the WiFi side. Hysteresis keeps a label while activity stays
+    above ``_HOT_CLEAR_MBPS`` so a steady download does not flicker to ``--``.
     """
     wifi_d = float(m.get("wifi_down", 0) or 0)
     wifi_u = float(m.get("wifi_up", 0) or 0)
     lan_d = float(m.get("lan_down", 0) or 0)
     lan_u = float(m.get("lan_up", 0) or 0)
 
-    w_sur, w_dir, w_cur = _hot_best_side(
+    w_act, w_dir, w_cur = _hot_best_side(
         m.get("wifi_history_down"),
         m.get("wifi_history_up"),
         wifi_d,
         wifi_u,
     )
-    l_sur, l_dir, l_cur = _hot_best_side(
+    l_act, l_dir, l_cur = _hot_best_side(
         m.get("lan_history_down"),
         m.get("lan_history_up"),
         lan_d,
@@ -1200,37 +1214,71 @@ def compute_hot_label(m: dict[str, Any]) -> str:
     top1_name, top1_rate = (tops[0] if tops else ("", 0.0))
     n_hot = sum(1 for _n, r in tops if r >= _HOT_MULTI_CLIENT_MBPS)
 
-    w_hot = w_sur >= _HOT_THRESH_MBPS
-    l_hot = l_sur >= _HOT_THRESH_MBPS
-    w_rate_s = format_hot_bitrate(w_cur if w_cur > 0 else w_sur)
-    l_rate_s = format_hot_bitrate(l_cur if l_cur > 0 else l_sur)
+    # Enter at THRESH; stay latched while either side ≥ CLEAR (see hold below).
+    was_hot = str(_hot_hold.get("label") or "").strip() not in ("", "Hot --", "Hot")
+    enter = _HOT_CLEAR_MBPS if was_hot else _HOT_THRESH_MBPS
+    w_hot = w_act >= enter
+    l_hot = l_act >= enter
+    wifi_dom = w_hot and (not l_hot or l_act < w_act * _HOT_LAN_DOMINATES)
+    lan_dom = l_hot and (not w_hot or w_act < l_act * _HOT_LAN_DOMINATES)
+    mixed = w_hot and l_hot and not wifi_dom and not lan_dom
 
-    # 1) WiFi solo — one STA covers ≥50% of the WiFi surplus
-    if w_hot and top1_rate >= w_sur * _HOT_CLIENT_SHARE:
-        name = (top1_name or "").strip()
-        rate_s = format_hot_bitrate(top1_rate)
-        if name and name not in ("?", "-", "--"):
-            return f"Hot {name} {rate_s} {w_dir}"
-        return f"Hot WiFi {rate_s} {w_dir}"
+    w_rate_s = format_hot_bitrate(w_cur if w_cur > 0 else w_act)
+    l_rate_s = format_hot_bitrate(l_cur if l_cur > 0 else l_act)
+    name = (top1_name or "").strip()
+    named = bool(name) and name not in ("?", "-", "--")
+    # Name STA against current WiFi rate (sustained), not vanishing surplus.
+    wifi_ref = max(w_cur, w_act)
+    sta_covers_wifi = top1_rate >= _HOT_CLEAR_MBPS and wifi_ref > 0 and (
+        top1_rate >= wifi_ref * _HOT_CLIENT_SHARE
+    )
 
-    # 2) LAN solo — LAN spike dominates, WiFi quiet relative to it
-    if l_hot and (not w_hot or w_sur < l_sur * _HOT_LAN_DOMINATES):
-        return f"Hot LAN {l_rate_s} {l_dir}"
+    label = "Hot --"
+    if wifi_dom:
+        if sta_covers_wifi:
+            rate_s = format_hot_bitrate(top1_rate if top1_rate > 0 else w_cur)
+            label = f"Hot {name} {rate_s} {w_dir}" if named else f"Hot WiFi {rate_s} {w_dir}"
+        else:
+            n = max(2, n_hot) if n_hot >= 2 else (n_hot if n_hot > 0 else 0)
+            if n >= 2 and top1_rate < wifi_ref * _HOT_CLIENT_SHARE:
+                label = f"Hot WiFi {n} clients"
+            else:
+                label = f"Hot WiFi {w_rate_s} {w_dir}"
+    elif lan_dom:
+        label = f"Hot LAN {l_rate_s} {l_dir}"
+    elif mixed:
+        if sta_covers_wifi and named:
+            label = (
+                f"Hot {name} {format_hot_bitrate(top1_rate)} {w_dir}"
+                f" + LAN {l_rate_s} {l_dir}"
+            )
+        else:
+            label = f"Hot WiFi {w_rate_s} {w_dir} + LAN {l_rate_s} {l_dir}"
 
-    # 3) Mixed WiFi + LAN
-    if w_hot and l_hot:
-        return f"Hot WiFi {w_rate_s} {w_dir} + LAN {l_rate_s} {l_dir}"
+    # Hold previous Hot while activity still above clear floor (STA sample gaps).
+    act = max(w_act, l_act)
+    prev = str(_hot_hold.get("label") or "Hot --")
+    if label == "Hot --" and prev not in ("Hot --", "Hot", "") and act >= _HOT_CLEAR_MBPS:
+        label = prev
+    elif (
+        label.startswith("Hot WiFi")
+        and " + LAN " not in label
+        and prev.startswith("Hot ")
+        and act >= _HOT_CLEAR_MBPS
+        and wifi_dom
+    ):
+        # Keep named STA across brief top_* zeros: "Hot Mac 180M D"
+        parts = prev.split()
+        if (
+            len(parts) >= 4
+            and parts[1] not in ("WiFi", "LAN", "--")
+            and parts[-1] in ("D", "U")
+        ):
+            label = f"Hot {parts[1]} {w_rate_s} {w_dir}"
 
-    # 4) WiFi spike shared across several STAs
-    if w_hot and top1_rate < w_sur * _HOT_CLIENT_SHARE:
-        n = max(2, n_hot) if n_hot >= 2 else (n_hot if n_hot > 0 else 0)
-        if n >= 2:
-            return f"Hot WiFi {n} clients"
-        # Anonymous WiFi spike (no / weak top attribution)
-        return f"Hot WiFi {w_rate_s} {w_dir}"
-
-    # 5) Idle
-    return "Hot --"
+    _hot_hold["label"] = label
+    _hot_hold["act"] = act
+    return label
 
 
 def _fit_hot_label(text: str, max_w: int) -> str:
@@ -1239,6 +1287,15 @@ def _fit_hot_label(text: str, max_w: int) -> str:
         return ""
     if pf.text_ink_width(text, size="tiny") <= max_w:
         return text
+    # Mixed with named STA → drop name first: "Hot Mac 95M D + LAN 90M D"
+    if " + LAN " in text and text.startswith("Hot ") and "Hot WiFi " not in text:
+        parts = text.split()
+        # Hot <name...> <rate> <D|U> + LAN <rate> <D|U>
+        if len(parts) >= 7 and parts[-4] == "+" and parts[-3] == "LAN":
+            alt = f"Hot WiFi {parts[-6]} {parts[-5]} + LAN {parts[-2]} {parts[-1]}"
+            if pf.text_ink_width(alt, size="tiny") <= max_w:
+                return alt
+            text = alt
     # Mixed → compact
     if " + LAN " in text and text.startswith("Hot WiFi "):
         # Hot WiFi 32M D + LAN 23M D → Hot W32MD+L23MD
