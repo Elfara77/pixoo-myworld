@@ -1241,7 +1241,14 @@ def _draw_sum_hot_row(img, m: dict[str, Any], *, x0: int, x1: int, y: int) -> No
     shown = _fit_hot_label(raw, x1 - x0 + 1)
     idle = shown.rstrip().endswith("--") or shown.strip() == "Hot"
     col = DIM if idle else FG
-    _txt(img, x0, y, shown, col, size="tiny", role="status")
+    # "Hot" always in graph-down blue; remainder keeps status color.
+    if shown.startswith("Hot"):
+        x = _txt(img, x0, y, "Hot", GRAPH_DOWN, size="tiny", role="label")
+        rest = shown[3:]
+        if rest:
+            _txt(img, x, y, rest, col, size="tiny", role="status")
+    else:
+        _txt(img, x0, y, shown, col, size="tiny", role="status")
 
 
 def _draw_sum_top_client_line(
@@ -1291,7 +1298,7 @@ def _draw_sum_top_clients_rows(
 ) -> int:
     """Two lines only: #1 top_down + D, then #1 top_up + U (tag after rate unit)."""
     for entry, tag, tag_col in (
-        (_first_top(m.get("top_down")), "D", GREEN),
+        (_first_top(m.get("top_down")), "D", GRAPH_DOWN),
         (_first_top(m.get("top_up")), "U", ORANGE),
     ):
         if y + 4 >= footer_y0:
