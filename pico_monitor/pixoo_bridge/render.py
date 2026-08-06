@@ -91,8 +91,8 @@ _NET_SAT_SMOOTH: float | None = None
 # Short histories for SUM SYS/NET gauge trend arrows (last samples).
 _SYS_HP_HIST: list[float] = []
 _NET_SAT_HIST: list[float] = []
-# SUM bottom block: four equal quarters of the SUM dwell D (T1=T2=T3=T4, Σ=D).
-# T1–T2 clients; T3 graph+UP; T4 same graph+DWN.
+# SUM dwell D split into 8 equal slots (Σ=D):
+# 0–3 clients (4/8); 4–7 WAN graph (4/8) with UP on 4–5 and DWN on 6–7.
 _SUM_DWELL_T0 = 0.0
 _SUM_DWELL_D = 1.0
 
@@ -101,16 +101,26 @@ def set_sum_dwell(t0: float, dwell_s: float) -> None:
     """Bind SUM phase clock to the current rotator dwell (call each SUM frame)."""
     global _SUM_DWELL_T0, _SUM_DWELL_D
     _SUM_DWELL_T0 = float(t0)
-    _SUM_DWELL_D = max(0.04, float(dwell_s))
+    _SUM_DWELL_D = max(0.08, float(dwell_s))
 
 
 def sum_phase() -> int:
-    """0–3 within current SUM dwell: 0/1 no graph, 2 graph UP, 3 graph DWN."""
+    """0–7 within current SUM dwell (equal eighths of D)."""
     import time
 
     elapsed = max(0.0, time.monotonic() - _SUM_DWELL_T0)
-    quarter = _SUM_DWELL_D / 4.0
-    return min(3, int(elapsed / quarter))
+    eighth = _SUM_DWELL_D / 8.0
+    return min(7, int(elapsed / eighth))
+
+
+def sum_show_wan_graph() -> bool:
+    """True for the last 4/8 of the SUM dwell (graph window)."""
+    return sum_phase() >= 4
+
+
+def sum_graph_label_up() -> bool:
+    """True for first half of graph window (UP); False → DWN."""
+    return sum_phase() < 6
 
 
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
@@ -653,6 +663,83 @@ def _gauge(draw, x: int, y: int, w: int, pct: float, color, *, alert: bool = Fal
     elif alert:
         color = RED
     draw.rectangle([x + 1, y + 1, x + fill, y + 3], fill=color)
+
+
+def _wifi_wired_split_bar(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    w: int,
+    wifi_mbps: float,
+    wired_mbps: float,
+    *,
+    h: int = 5,
+) -> None:
+    """Full solid bar: WiFi orange (left) + Wired green (right) by rate ratio."""
+    if w <= 0 or h <= 0:
+        return
+    wifi = max(0.0, float(wifi_mbps or 0))
+    wired = max(0.0, float(wired_mbps or 0))
+    total = wifi + wired
+    x1 = x + w - 1
+    y1 = y + h - 1
+    if total <= 0:
+        draw.rectangle([x, y, x1, y1], fill=BAR_BG)
+        return
+    # wifi_ratio = wifi/total → left width; remainder = wired (right).
+    wifi_w = int(round(w * (wifi / total)))
+    wifi_w = max(0, min(w, wifi_w))
+    if wifi_w >= w:
+        draw.rectangle([x, y, x1, y1], fill=ORANGE)
+        return
+    if wifi_w <= 0:
+        draw.rectangle([x, y, x1, y1], fill=GREEN)
+        return
+    draw.rectangle([x, y, x + wifi_w - 1, y1], fill=ORANGE)
+    draw.rectangle([x + wifi_w, y, x1, y1], fill=GREEN)
+
+
+def _draw_sum_down_up_split_gauges(
+    img,
+    draw: ImageDraw.ImageDraw,
+    m: dict[str, Any],
+    *,
+    x0: int,
+    x1: int,
+    y: int,
+    step: int,
+) -> int:
+    """Two full-width DOWN/UP WiFi|Wired bars; returns y after both rows."""
+    # Align both gauges to the wider "DOWN" label.
+    lab_w = pf.text_width("DOWN", size="tiny")
+    gap = 1
+    gx = x0 + lab_w + gap
+    gw = max(4, x1 - gx + 1)
+    bar_h = 5
+
+    _txt(img, x0, y, "DOWN", LABEL, size="tiny", role="label")
+    _wifi_wired_split_bar(
+        draw,
+        gx,
+        y,
+        gw,
+        float(m.get("wifi_down", 0) or 0),
+        float(m.get("lan_down", 0) or 0),
+        h=bar_h,
+    )
+    y += step
+
+    _txt(img, x0, y, "UP", LABEL, size="tiny", role="label")
+    _wifi_wired_split_bar(
+        draw,
+        gx,
+        y,
+        gw,
+        float(m.get("wifi_up", 0) or 0),
+        float(m.get("lan_up", 0) or 0),
+        h=bar_h,
+    )
+    return y + step
 
 
 def _gauge_row(img, draw, y: int, label: str, pct: float, *, kind: str = "load") -> None:
@@ -1251,44 +1338,48 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _draw_rate(img, ux, y, up, color=up_col)
     y += step
 
-    # 2–3) SYS/NET + CPU/RAM — trend arrow in slot before each gauge
-    tr_sys = _trend_from_history(_SYS_HP_HIST, eps_abs=1.0, eps_ratio=0.02)
-    tr_net = _trend_from_history(_NET_SAT_HIST, eps_abs=1.0, eps_ratio=0.02)
-
-    def _label_trend_gauge(
-        lab_x: int,
-        lab: str,
-        mark: str,
-        pct: float,
-        col,
-        *,
-        alert: bool,
-        g_x0: int,
-        g_w0: int,
-    ) -> None:
-        _txt(img, lab_x, y, lab, LABEL, size="tiny", role="label", alert=alert)
-        if mark:
-            _draw_trend(img, lab_x + lab_w, y, mark)
-        _gauge(d, g_x0, y, g_w0, pct, col, alert=alert)
-
-    _label_trend_gauge(lab_l, "SYS", tr_sys, sys_hp, sys_col, alert=False, g_x0=g_l, g_w0=g_w_l)
-    _label_trend_gauge(lab_r, "NET", tr_net, net_sat, net_col, alert=False, g_x0=g_r, g_w0=g_w_r)
-    y += step
-
+    # 2–3) slots 0–3: SYS/NET+CPU/RAM — slots 4–7 (graph): DOWN/UP WiFi|Wired bars
+    show_wan_graph = sum_show_wan_graph()
     cpu = float(m.get("cpu", 0) or 0)
     ram = float(m.get("ram", 0) or 0)
     tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
     disk = _disk_used_pct(m)
 
-    cpu_col = _diagram_color(cpu, kind="load")
-    ram_col = _diagram_color(ram, kind="load")
-    cpu_alert = _is_crit_load(cpu)
-    ram_alert = _is_crit_load(ram)
-    tr_cpu = _trend_from_history(m.get("cpu_history"), eps_abs=1.0, eps_ratio=0.02)
-    tr_ram = _trend_from_history(m.get("ram_history"), eps_abs=1.0, eps_ratio=0.02)
-    _label_trend_gauge(lab_l, "CPU", tr_cpu, cpu, cpu_col, alert=cpu_alert, g_x0=g_l, g_w0=g_w_l)
-    _label_trend_gauge(lab_r, "RAM", tr_ram, ram, ram_col, alert=ram_alert, g_x0=g_r, g_w0=g_w_r)
-    y += step
+    if show_wan_graph:
+        y = _draw_sum_down_up_split_gauges(img, d, m, x0=x0, x1=x1, y=y, step=step)
+    else:
+        tr_sys = _trend_from_history(_SYS_HP_HIST, eps_abs=1.0, eps_ratio=0.02)
+        tr_net = _trend_from_history(_NET_SAT_HIST, eps_abs=1.0, eps_ratio=0.02)
+
+        def _label_trend_gauge(
+            lab_x: int,
+            lab: str,
+            mark: str,
+            pct: float,
+            col,
+            *,
+            alert: bool,
+            g_x0: int,
+            g_w0: int,
+        ) -> None:
+            _txt(img, lab_x, y, lab, LABEL, size="tiny", role="label", alert=alert)
+            if mark:
+                _draw_trend(img, lab_x + lab_w, y, mark)
+            _gauge(d, g_x0, y, g_w0, pct, col, alert=alert)
+
+        _label_trend_gauge(lab_l, "SYS", tr_sys, sys_hp, sys_col, alert=False, g_x0=g_l, g_w0=g_w_l)
+        _label_trend_gauge(lab_r, "NET", tr_net, net_sat, net_col, alert=False, g_x0=g_r, g_w0=g_w_r)
+        y += step
+
+        cpu_col = _diagram_color(cpu, kind="load")
+        ram_col = _diagram_color(ram, kind="load")
+        cpu_alert = _is_crit_load(cpu)
+        ram_alert = _is_crit_load(ram)
+        tr_cpu = _trend_from_history(m.get("cpu_history"), eps_abs=1.0, eps_ratio=0.02)
+        tr_ram = _trend_from_history(m.get("ram_history"), eps_abs=1.0, eps_ratio=0.02)
+        _label_trend_gauge(lab_l, "CPU", tr_cpu, cpu, cpu_col, alert=cpu_alert, g_x0=g_l, g_w0=g_w_l)
+        _label_trend_gauge(lab_r, "RAM", tr_ram, ram, ram_col, alert=ram_alert, g_x0=g_r, g_w0=g_w_r)
+        y += step
 
     # 4) DSK % …… TMP↑ °C — TMP label at same lab_r as NET/RAM
     dsk_col = _diagram_color(disk, kind="disk")
@@ -1360,12 +1451,10 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
     y += step
 
-    # 7–8) Hot Wifi + tops  XOR  WAN graph — 4 equal quarters of SUM dwell D.
-    # T1/T2 clients; T3 graph+UP; T4 graph+DWN (see set_sum_dwell / sum_phase).
+    # 7–8) Hot Wifi + tops  XOR  WAN graph — graph = last 4/8 of dwell D.
+    # Graph labels: UP then DWN, half each (see sum_graph_label_up).
     block_y0 = y
     block_h = step * 3 - 1  # 17px — three tiny rows
-    phase = sum_phase()
-    show_wan_graph = phase >= 2
     if show_wan_graph:
         down_h = list(m.get("wan_history_down") or [])[-64:]
         up_h = list(m.get("wan_history_up") or [])[-64:]
@@ -1382,8 +1471,8 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             GRAPH_UP,
             fill_down=True,
         )
-        # Same left spot: UP on T3, DWN on T4 (inverted pill like footer).
-        _draw_sum_graph_dir_badge(img, d, x0, block_y0, show_up=(phase == 2))
+        # Same left spot: UP first half of graph window, DWN second half.
+        _draw_sum_graph_dir_badge(img, d, x0, block_y0, show_up=sum_graph_label_up())
         y = block_y0 + step * 3
     else:
         # Hot Wifi n …… down_rate up_rate (hottest Wi‑Fi STA)
