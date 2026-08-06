@@ -91,20 +91,26 @@ _NET_SAT_SMOOTH: float | None = None
 # Short histories for SUM SYS/NET gauge trend arrows (last samples).
 _SYS_HP_HIST: list[float] = []
 _NET_SAT_HIST: list[float] = []
-# SUM bottom block: 2 dwells clients → 2 dwells WAN graph → repeat.
-_SUM_ALT_I = 0
+# SUM bottom block: four equal quarters of the SUM dwell D (T1=T2=T3=T4, Σ=D).
+# T1–T2 clients; T3 graph+UP; T4 same graph+DWN.
+_SUM_DWELL_T0 = 0.0
+_SUM_DWELL_D = 1.0
 
 
-def advance_sum_alt_phase() -> None:
-    """Call once each time a SUM dwell ends (rotator leaves SUM)."""
-    global _SUM_ALT_I
-    _SUM_ALT_I += 1
+def set_sum_dwell(t0: float, dwell_s: float) -> None:
+    """Bind SUM phase clock to the current rotator dwell (call each SUM frame)."""
+    global _SUM_DWELL_T0, _SUM_DWELL_D
+    _SUM_DWELL_T0 = float(t0)
+    _SUM_DWELL_D = max(0.04, float(dwell_s))
 
 
-def sum_alt_show_wan_graph() -> bool:
-    """True for SUM dwells 3–4, 7–8, … (2 clients then 2 graph)."""
-    # Completed dwells 0,1 → clients; 2,3 → graph; …
-    return (_SUM_ALT_I // 2) % 2 == 1
+def sum_phase() -> int:
+    """0–3 within current SUM dwell: 0/1 no graph, 2 graph UP, 3 graph DWN."""
+    import time
+
+    elapsed = max(0.0, time.monotonic() - _SUM_DWELL_T0)
+    quarter = _SUM_DWELL_D / 4.0
+    return min(3, int(elapsed / quarter))
 
 
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
@@ -508,6 +514,31 @@ def _draw_rate_right(
     x = max(0, right - w + 1)
     _draw_rate(img, x, y, mbps, size=size, color=color)
     return x
+
+
+def _rate_dir_tag_ink_width(mbps: float, tag: str, *, size: str = "tiny") -> int:
+    """Width through last ink of rate + 1px gap + direction tag."""
+    return _rate_ink_width(mbps, size=size) + 1 + pf.text_ink_width(tag, size=size)
+
+
+def _draw_rate_dir_tag_right(
+    img,
+    right: int,
+    y: int,
+    mbps: float,
+    tag: str,
+    tag_color: Sequence[int],
+    *,
+    size: str = "tiny",
+    rate_color: Sequence[int] | None = None,
+) -> int:
+    """Draw rate then direction tag (U/D) flush-right. Returns rate start x."""
+    tag_ink = pf.text_ink_width(tag, size=size)
+    tag_x = max(0, right - tag_ink + 1)
+    rate_right = tag_x - 2  # 1px gap before tag
+    rx = _draw_rate_right(img, rate_right, y, mbps, size=size, color=rate_color)
+    _txt(img, tag_x, y, tag, tag_color, size=size, role="status")
+    return rx
 
 
 def _draw_val_unit_right(
@@ -1138,15 +1169,11 @@ def _draw_sum_graph_dir_badge(
     draw: ImageDraw.ImageDraw,
     x: int,
     y: int,
+    *,
+    show_up: bool,
 ) -> None:
-    """Left DW/UP badge on SUM WAN graph: 1px padded pill, color fill, black text.
-
-    Alternates DW ↔ UP every 1s at the same position for the whole graph phase.
-    """
-    import time
-
-    show_up = (int(time.monotonic()) % 2) == 1
-    lab = "UP" if show_up else "DW"
+    """Left DWN/UP badge on SUM WAN graph: 1px padded pill, color fill, black text."""
+    lab = "UP" if show_up else "DWN"
     fill = GRAPH_UP if show_up else GRAPH_DOWN
     pad = 1
     ink = max(1, pf.text_ink_width(lab, size="tiny"))
@@ -1322,11 +1349,12 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
     y += step
 
-    # 7–8) Hot Wifi + 2 tops  XOR  WAN 64-sample graph
-    # Alternation is 2 SUM dwells clients → 2 SUM dwells graph (see advance_sum_alt_phase).
+    # 7–8) Hot Wifi + tops  XOR  WAN graph — 4 equal quarters of SUM dwell D.
+    # T1/T2 clients; T3 graph+UP; T4 graph+DWN (see set_sum_dwell / sum_phase).
     block_y0 = y
     block_h = step * 3 - 1  # 17px — three tiny rows
-    show_wan_graph = sum_alt_show_wan_graph()
+    phase = sum_phase()
+    show_wan_graph = phase >= 2
     if show_wan_graph:
         down_h = list(m.get("wan_history_down") or [])[-64:]
         up_h = list(m.get("wan_history_up") or [])[-64:]
@@ -1343,8 +1371,8 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             GRAPH_UP,
             fill_down=True,
         )
-        # Same left spot: DW ↔ UP every 1s, inverted pill like footer.
-        _draw_sum_graph_dir_badge(img, d, x0, block_y0)
+        # Same left spot: UP on T3, DWN on T4 (inverted pill like footer).
+        _draw_sum_graph_dir_badge(img, d, x0, block_y0, show_up=(phase == 2))
         y = block_y0 + step * 3
     else:
         # Hot Wifi n …… down_rate up_rate (hottest Wi‑Fi STA)
@@ -1377,11 +1405,11 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             _txt(img, _right_x("--"), y, "--", DIM, size="tiny", role="status")
         y += step
 
-        # Line 1 = #1 top_up; line 2 = #1 top_down (hostname + rate only)
+        # Line 1 = #1 top_up + U; line 2 = #1 top_down + D (after unit)
         footer_y0 = 64 - 7
-        for name_rate, cap in (
-            (_pick_top(m.get("top_up"), limit=1), _WAN_MAX_UP_MBPS),
-            (_pick_top(m.get("top_down"), limit=1), _WAN_MAX_DOWN_MBPS),
+        for name_rate, cap, tag, tag_col in (
+            (_pick_top(m.get("top_up"), limit=1), _WAN_MAX_UP_MBPS, "U", ORANGE),
+            (_pick_top(m.get("top_down"), limit=1), _WAN_MAX_DOWN_MBPS, "D", GREEN),
         ):
             if y + 4 >= footer_y0:
                 break
@@ -1390,11 +1418,19 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
                 y += step
                 continue
             name, rate = name_rate[0]
-            rate_w = _rate_ink_width(rate)
-            max_name_w = max(0, x1 - rate_w - 2 - x0 + 1)
+            trail_w = _rate_dir_tag_ink_width(rate, tag)
+            max_name_w = max(0, x1 - trail_w - 2 - x0 + 1)
             shown = _truncate_to_width(str(name), max_name_w)
             _txt(img, x0, y, shown, FG if rate > 0 else DIM, size="tiny", role="status")
-            _draw_rate_right(img, x1, y, rate, color=_wan_link_color(rate, cap))
+            _draw_rate_dir_tag_right(
+                img,
+                x1,
+                y,
+                rate,
+                tag,
+                tag_col,
+                rate_color=_wan_link_color(rate, cap),
+            )
             y += step
 
     # 9) Footer pinned to bottom: continuous 7px inverted band

@@ -31,12 +31,12 @@ if str(_HERE.parent) not in sys.path:
 
 from pixoo_bridge.client import PixooClient
 from pixoo_bridge.render import (
-    advance_sum_alt_phase,
     get_screen_ids,
     render_boot_banner,
     render_screen,
     screen_dwell_seconds,
     set_render_options,
+    set_sum_dwell,
     _demo_metrics,
 )
 
@@ -280,12 +280,8 @@ def main(argv: list[str] | None = None) -> int:
         cur_sid = screens[screen_i]
         dwell = screen_dwell_seconds(cur_sid, args.screen_seconds)
         if time.monotonic() - screen_t0 >= dwell:
-            leaving = screens[screen_i]
             screen_i = (screen_i + 1) % len(screens)
             screen_t0 = time.monotonic()
-            # Count completed SUM dwells for 2+2 clients/graph alternation.
-            if leaving == "SUM":
-                advance_sum_alt_phase()
             LOG.info(
                 "screen → %s (%d/%d) dwell=%.1fs%s",
                 screens[screen_i],
@@ -296,6 +292,10 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         screen_i = screen_i % len(screens)
+        cur_sid = screens[screen_i]
+        dwell = screen_dwell_seconds(cur_sid, args.screen_seconds)
+        if cur_sid == "SUM":
+            set_sum_dwell(screen_t0, dwell)
         frame = render_screen(m, screen_i)
         if args.preview:
             frame.save(args.preview / f"{screen_i:02d}_{screens[screen_i].lower()}.png")
