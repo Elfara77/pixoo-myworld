@@ -80,6 +80,8 @@ _WAN_MAX_DOWN_MBPS = 190.0
 _WAN_MAX_UP_MBPS = 12.0
 # Soft client count at which Net client-load factor reaches 100% saturation.
 _NET_CLIENTS_SOFT = 24.0
+# Client is "greedy" if down or up util vs WAN max is ≥ this fraction.
+_GREEDY_UTIL = 0.40
 
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
 HEAVY_SCREEN_IDS = frozenset({"LOD", "GRP", "WLC", "TOP", "CLI", "TMP", "SUM"})
@@ -369,6 +371,20 @@ def _rate_display_color(mbps: float, num: str, unit: str) -> tuple[int, int, int
     return FG
 
 
+def _wan_link_color(mbps: float, max_mbps: float) -> tuple[int, int, int]:
+    """Color vs WAN cap: gray idle, green <40%, yellow 40–70%, red ≥70%."""
+    v = float(mbps or 0)
+    cap = max(0.1, float(max_mbps))
+    if v <= 0 or _rate_is_negligible(v):
+        return DIM
+    util = v / cap
+    if util < 0.40:
+        return GREEN
+    if util < 0.70:
+        return YELLOW
+    return RED
+
+
 def _draw_rate(
     img,
     x: int,
@@ -377,9 +393,10 @@ def _draw_rate(
     *,
     size: str = "tiny",
     alert: bool = False,
+    color: Sequence[int] | None = None,
 ) -> int:
     num, unit = _split_rate(mbps)
-    col = _rate_display_color(mbps, num, unit)
+    col = color if color is not None else _rate_display_color(mbps, num, unit)
     return _draw_val_unit(
         img, x, y, num, unit, col, size=size, value_role="status", alert=alert
     )
@@ -400,11 +417,12 @@ def _draw_rate_right(
     mbps: float,
     *,
     size: str = "tiny",
+    color: Sequence[int] | None = None,
 ) -> int:
     """Draw rate ending at `right` (inclusive edge). Returns start x."""
     w = _rate_pixel_width(mbps, size=size)
     x = max(0, right - w + 1)
-    _draw_rate(img, x, y, mbps, size=size)
+    _draw_rate(img, x, y, mbps, size=size, color=color)
     return x
 
 
@@ -791,22 +809,44 @@ def _health_score(m: dict[str, Any]) -> int:
 
 def _pick_top_by_wan_util(m: dict[str, Any]) -> tuple[str, float] | None:
     """Client with highest util vs WAN max down/up (not WiFi PHY max)."""
-    best: tuple[str, float, float] | None = None  # name, rate, util
-    for name, rate in _pick_top(m.get("top_down"), limit=5):
-        util = float(rate) / _WAN_MAX_DOWN_MBPS
-        if best is None or util > best[2]:
-            best = (name, float(rate), util)
-    for name, rate in _pick_top(m.get("top_up"), limit=5):
-        util = float(rate) / _WAN_MAX_UP_MBPS
-        if best is None or util > best[2]:
-            best = (name, float(rate), util)
-    if not best:
+    ranked = _rank_clients_by_wan_util(m)
+    if not ranked:
         return None
-    return best[0], best[1]
+    name, down, up, _util = ranked[0]
+    # Show the rate of the direction that dominates util.
+    d_u = down / _WAN_MAX_DOWN_MBPS
+    u_u = up / _WAN_MAX_UP_MBPS
+    return name, down if d_u >= u_u else up
+
+
+def _rank_clients_by_wan_util(m: dict[str, Any]) -> list[tuple[str, float, float, float]]:
+    """Merge top_down/top_up by hostname → (name, down, up, max_util)."""
+    by_name: dict[str, list[float]] = {}
+    for name, rate in _pick_top(m.get("top_down"), limit=12):
+        ent = by_name.setdefault(name, [0.0, 0.0])
+        ent[0] = max(ent[0], float(rate))
+    for name, rate in _pick_top(m.get("top_up"), limit=12):
+        ent = by_name.setdefault(name, [0.0, 0.0])
+        ent[1] = max(ent[1], float(rate))
+    ranked: list[tuple[str, float, float, float]] = []
+    for name, (down, up) in by_name.items():
+        util = max(down / _WAN_MAX_DOWN_MBPS, up / _WAN_MAX_UP_MBPS)
+        ranked.append((name, down, up, util))
+    ranked.sort(key=lambda x: x[3], reverse=True)
+    return ranked
+
+
+def _greedy_clients(
+    m: dict[str, Any], *, limit: int = 3
+) -> tuple[int, list[tuple[str, float, float, float]]]:
+    """Count clients ≥ greedy util; return top `limit` by util (down and/or up)."""
+    ranked = _rank_clients_by_wan_util(m)
+    greedy = [row for row in ranked if row[3] >= _GREEDY_UTIL]
+    return len(greedy), greedy[:limit]
 
 
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """Full-bleed summary: SYS/NET health, metrics, then LAN → WiFi → DWN/UP → Top."""
+    """Full-bleed summary: SYS/NET, metrics, LAN → WiFi → DWN/UP → Top → Hot."""
     sys_hp = _system_health_score(m)
     net_sat = _network_saturation(m)
     net_hp = int(round(max(0.0, min(100.0, 100.0 - net_sat))))
@@ -827,7 +867,9 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
     disk = _disk_used_pct(m)
 
+    # Slightly tighter rows so Hot (greedy) fits under Top.
     y = 15
+    row = 5
     for label, val, kind, unit in (
         ("CPU", cpu, "load", "%"),
         ("RAM", ram, "load", "%"),
@@ -855,7 +897,9 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         )
         bar_pct = val if kind != "temp_cpu" else min(100.0, (val / max(float(CRIT_TEMP_CPU), 1.0)) * 100.0)
         _gauge(d, 36, y + 1, 27, bar_pct, col, alert=blink_alert)
-        y += 6
+        y += row
+
+    foot = 5
 
     # 1) LAN1234 …… USB23
     ports = list(m.get("lan_ports") or [False, False, False, False])[:4]
@@ -882,7 +926,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     ux = _txt(img, ux, y, usb_blk, LABEL, size="tiny", role="label")
     ux = _txt(img, ux, y, d2, GREEN if u2 else RED, size="tiny", role="status")
     _txt(img, ux, y, d3, GREEN if u3 else RED, size="tiny", role="status")
-    y += 6
+    y += foot
 
     # 2) WiFi wifi/total …… VPN123
     clients = int(m.get("clients", 0) or 0)
@@ -904,34 +948,68 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     vx = _txt(img, vx, y, "VPN", LABEL, size="tiny", role="label")
     for i, (_name, on, _typ) in enumerate(slots[:3], start=1):
         vx = _txt(img, vx, y, str(i), GREEN if on else RED, size="tiny", role="status")
-    y += 6
+    y += foot
 
-    # 3) DWN rate …… UP rate (right-justified)
+    # 3) DWN rate …… UP rate — colors vs WAN max caps
     down = float(m.get("wan_down", 0) or 0)
     up = float(m.get("wan_up", 0) or 0)
+    down_col = _wan_link_color(down, _WAN_MAX_DOWN_MBPS)
+    up_col = _wan_link_color(up, _WAN_MAX_UP_MBPS)
     _txt(img, 1, y, "DWN", LABEL, size="tiny", role="label")
-    _draw_rate(img, 1 + pf.text_width("DWN", size="tiny") + 2, y, down)
+    _draw_rate(
+        img, 1 + pf.text_width("DWN", size="tiny") + 2, y, down, color=down_col
+    )
     up_lab_w = pf.text_width("UP", size="tiny")
     rate_w = _rate_pixel_width(up)
     up_x = max(0, 63 - (up_lab_w + 2 + rate_w) + 1)
     _txt(img, up_x, y, "UP", LABEL, size="tiny", role="label")
-    _draw_rate(img, up_x + up_lab_w + 2, y, up)
-    y += 6
+    _draw_rate(img, up_x + up_lab_w + 2, y, up, color=up_col)
+    y += foot
 
     # 4) Top hostname …… rate (right-justified); ranked vs WAN max down/up
     top = _pick_top_by_wan_util(m)
     _txt(img, 1, y, "Top", LABEL, size="tiny", role="label")
     if top:
         name, rate = top
+        # Color rate with the direction's WAN cap (pick matching max).
+        ranked0 = _rank_clients_by_wan_util(m)
+        top_col = FG
+        if ranked0 and ranked0[0][0] == name:
+            _n, d0, u0, _u = ranked0[0]
+            if d0 / _WAN_MAX_DOWN_MBPS >= u0 / _WAN_MAX_UP_MBPS:
+                top_col = _wan_link_color(rate, _WAN_MAX_DOWN_MBPS)
+            else:
+                top_col = _wan_link_color(rate, _WAN_MAX_UP_MBPS)
         rate_w = _rate_pixel_width(rate)
         name_x = 1 + pf.text_width("Top", size="tiny") + 2
         max_name_w = max(0, 63 - rate_w - 2 - name_x + 1)
         shown = _truncate_to_width(str(name), max_name_w)
         _txt(img, name_x, y, shown, FG, size="tiny", role="value")
-        _draw_rate_right(img, 63, y, rate)
+        _draw_rate_right(img, 63, y, rate, color=top_col)
     else:
         uptime = str(m.get("uptime_str", "--"))[:8]
         _txt(img, 1 + pf.text_width("Top", size="tiny") + 2, y, uptime, FG, size="tiny", role="value")
+    y += foot
+
+    # 5) Hot N + top-3 greedy hostnames (util ≥ 40% of WAN max down and/or up)
+    n_hot, hot = _greedy_clients(m, limit=3)
+    _txt(img, 1, y, "Hot", LABEL, size="tiny", role="label")
+    hot_col = DIM if n_hot == 0 else (YELLOW if n_hot < 3 else RED)
+    hx = _txt(
+        img,
+        1 + pf.text_width("Hot", size="tiny") + 2,
+        y,
+        str(n_hot),
+        hot_col,
+        size="tiny",
+        role="status",
+    )
+    if hot:
+        names = ",".join(n for n, _d, _u, _util in hot)
+        max_w = max(0, 63 - hx - 2)
+        shown = _truncate_to_width(names, max_w)
+        if shown:
+            _txt(img, hx + 2, y, shown, FG, size="tiny", role="value")
 
 
 def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
@@ -943,7 +1021,7 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
     if sid == "SUM":
         _render_sum(img, d, m)
         if m.get("_offline"):
-            _txt(img, 48, 58, "OFF", YELLOW, size="tiny", role="value", alert=True)
+            _txt(img, 50, 10, "OFF", YELLOW, size="tiny", role="value", alert=True)
         return img
 
     _header(img, d, SCREEN_TITLES.get(sid, sid), idx)
