@@ -695,14 +695,16 @@ configure_screens() {
     echo "  ⚠ au moins 1 écran requis — conservation de la sélection précédente."
     return 1
   fi
-  # Dedupe preserving order
+  # Dedupe preserving order (nounset-safe: empty uniq[@] is OK)
   local -a uniq=()
   local x u dup
   for x in "${on[@]}"; do
     dup=0
-    for u in "${uniq[@]}"; do
-      [[ "${u}" == "${x}" ]] && { dup=1; break; }
-    done
+    if ((${#uniq[@]} > 0)); then
+      for u in "${uniq[@]}"; do
+        [[ "${u}" == "${x}" ]] && { dup=1; break; }
+      done
+    fi
     (( dup )) || uniq+=("${x}")
   done
   on=("${uniq[@]}")
