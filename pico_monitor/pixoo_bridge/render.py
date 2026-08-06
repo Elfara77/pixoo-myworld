@@ -78,10 +78,15 @@ _WLC_GRAPH_MODE = "overlay"
 # WAN saturation caps (Mbps) for SUM Net health / Top relative ranking.
 _WAN_MAX_DOWN_MBPS = 190.0
 _WAN_MAX_UP_MBPS = 12.0
-# Soft client count at which Net client-load factor reaches 100% saturation.
+# Soft client count at which Net client-load factor reaches 100% raw occupancy.
 _NET_CLIENTS_SOFT = 24.0
 # Client is "greedy" if down or up util vs WAN max is ≥ this fraction.
 _GREEDY_UTIL = 0.40
+# NET hybrid: ignore util below this fraction of WAN cap; EMA previous weight.
+_NET_SIGNIF_UTIL = 0.05
+_NET_SMOOTH_PREV = 0.6
+_NET_SMOOTH_RAW = 0.4
+_NET_SAT_SMOOTH: float | None = None
 
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
 HEAVY_SCREEN_IDS = frozenset({"LOD", "GRP", "WLC", "TOP", "CLI", "TMP", "SUM"})
@@ -403,11 +408,21 @@ def _draw_rate(
 
 
 def _rate_pixel_width(mbps: float, *, size: str = "tiny") -> int:
+    """Advance width of a rate (includes trailing tiny spacer after unit)."""
     num, unit = _split_rate(mbps)
     w = pf.text_width(num, size=size)
     if unit:
         w += 1 + pf.text_width(unit, size=size)
     return w
+
+
+def _rate_ink_width(mbps: float, *, size: str = "tiny") -> int:
+    """Width through last lit pixel of a rate (flush-right)."""
+    num, unit = _split_rate(mbps)
+    if not unit:
+        return pf.text_ink_width(num, size=size)
+    # num advance + 1px gap + unit ink (same structure as _draw_val_unit)
+    return pf.text_width(num, size=size) + 1 + pf.text_ink_width(unit, size=size)
 
 
 def _draw_rate_right(
@@ -419,10 +434,35 @@ def _draw_rate_right(
     size: str = "tiny",
     color: Sequence[int] | None = None,
 ) -> int:
-    """Draw rate ending at `right` (inclusive edge). Returns start x."""
-    w = _rate_pixel_width(mbps, size=size)
+    """Draw rate with last ink on `right` (inclusive). Returns start x."""
+    w = _rate_ink_width(mbps, size=size)
     x = max(0, right - w + 1)
     _draw_rate(img, x, y, mbps, size=size, color=color)
+    return x
+
+
+def _draw_val_unit_right(
+    img,
+    right: int,
+    y: int,
+    num: str,
+    unit: str,
+    val_color: Sequence[int],
+    *,
+    size: str = "tiny",
+    value_role: str = "status",
+    alert: bool = False,
+) -> int:
+    """Draw num+unit with last ink on `right`. Returns start x."""
+    w = pf.text_width(num, size=size)
+    if unit:
+        w += 1 + pf.text_ink_width(unit, size=size)
+    else:
+        w = pf.text_ink_width(num, size=size)
+    x = max(0, right - w + 1)
+    _draw_val_unit(
+        img, x, y, num, unit, val_color, size=size, value_role=value_role, alert=alert
+    )
     return x
 
 
@@ -767,33 +807,73 @@ def _net_sat_color(sat: float) -> tuple[int, int, int]:
 
 
 def _system_health_score(m: dict[str, Any]) -> int:
-    """0–100 from CPU, RAM, temperature, disk (100 = healthy)."""
+    """0–100 router health via progressive penalties (100 = healthy).
+
+    CPU only after 50%, RAM after 60%, temp_cpu after 65°C, disk after 80%.
+    """
     cpu = float(m.get("cpu", 0) or 0)
     ram = float(m.get("ram", 0) or 0)
     t_cpu = float(m.get("temp_cpu", 0) or 0)
-    t_avg = float(m.get("temp_avg", 0) or _temp_avg(m))
     disk = _disk_used_pct(m)
 
-    cpu_s = max(0.0, 100.0 - cpu)
-    ram_s = max(0.0, 100.0 - ram)
-    temp_s = min(_temp_score(t_cpu, kind="temp_cpu"), _temp_score(t_avg, kind="temp"))
-    disk_s = max(0.0, 100.0 - disk)
+    cpu_penalty = max(0.0, (cpu - 50.0) / 50.0) * 40.0
+    ram_penalty = max(0.0, (ram - 60.0) / 40.0) * 30.0
+    if t_cpu > 65.0:
+        temp_penalty = min((t_cpu - 65.0) / 20.0, 1.0) * 20.0
+    else:
+        temp_penalty = 0.0
+    if disk > 80.0:
+        disk_penalty = min((disk - 80.0) / 20.0, 1.0) * 10.0
+    else:
+        disk_penalty = 0.0
 
-    score = 0.50 * cpu_s + 0.30 * ram_s + 0.10 * temp_s + 0.10 * disk_s
+    score_cpu = 100.0 - cpu_penalty
+    score_ram = 100.0 - ram_penalty
+    score_temp = 100.0 - temp_penalty
+    score_disk = 100.0 - disk_penalty
+
+    score = (
+        score_cpu * 0.35
+        + score_ram * 0.30
+        + score_temp * 0.25
+        + score_disk * 0.10
+    )
     return int(round(max(0.0, min(100.0, score))))
 
 
 def _network_saturation(m: dict[str, Any]) -> float:
-    """0–100 WAN/client load (100 = saturated / worst)."""
+    """0–100 effective network load (100 = saturated).
+
+    Hybrid: max(down×1.5, up×1.5, clients×0.4) after ignoring micro-util
+    (<5% of WAN cap), then EMA smooth 60/40 vs previous frame.
+    """
+    global _NET_SAT_SMOOTH
     if not bool(m.get("wan_online")):
+        _NET_SAT_SMOOTH = 100.0
         return 100.0
+
     wan_down = float(m.get("wan_down", 0) or 0)
     wan_up = float(m.get("wan_up", 0) or 0)
     clients = int(m.get("clients", 0) or 0)
-    down_u = min(1.0, wan_down / _WAN_MAX_DOWN_MBPS)
-    up_u = min(1.0, wan_up / _WAN_MAX_UP_MBPS)
-    cli_u = min(1.0, clients / max(1.0, _NET_CLIENTS_SOFT))
-    return 100.0 * (down_u + up_u + cli_u) / 3.0
+
+    instant_down = min(1.0, wan_down / _WAN_MAX_DOWN_MBPS)
+    instant_up = min(1.0, wan_up / _WAN_MAX_UP_MBPS)
+    instant_clients = min(1.0, clients / max(1.0, _NET_CLIENTS_SOFT))
+
+    signif_down = instant_down if instant_down > _NET_SIGNIF_UTIL else 0.0
+    signif_up = instant_up if instant_up > _NET_SIGNIF_UTIL else 0.0
+
+    raw = max(signif_down * 1.5, signif_up * 1.5, instant_clients * 0.4)
+    raw = min(1.0, raw)
+    raw_pct = 100.0 * raw
+
+    if _NET_SAT_SMOOTH is None:
+        _NET_SAT_SMOOTH = raw_pct
+    else:
+        _NET_SAT_SMOOTH = (
+            _NET_SAT_SMOOTH * _NET_SMOOTH_PREV + raw_pct * _NET_SMOOTH_RAW
+        )
+    return float(max(0.0, min(100.0, _NET_SAT_SMOOTH)))
 
 
 def _network_health_score(m: dict[str, Any]) -> int:
@@ -903,7 +983,8 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     y = 0
 
     def _right_x(text: str) -> int:
-        return x1 - pf.text_width(text, size="tiny") + 1
+        # Flush last ink to x1 (tiny advance width leaves a dead trailing px).
+        return x1 - pf.text_ink_width(text, size="tiny") + 1
 
     # 1) DWN … | UP … (first line)
     down = float(m.get("wan_down", 0) or 0)
@@ -912,7 +993,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     up_col = _wan_link_color(up, _WAN_MAX_UP_MBPS)
     _txt(img, x0, y, "DWN", LABEL, size="tiny", role="label")
     _draw_rate(img, x0 + pf.text_width("DWN", size="tiny") + 2, y, down, color=down_col)
-    up_rate_slot = pf.text_width("100K", size="tiny")
+    up_rate_slot = _rate_ink_width(100.0)  # widest short slot ≈ "100K"
     up_lab_w = pf.text_width("UP", size="tiny")
     up_lab_x = x1 - (up_lab_w + 2 + up_rate_slot) + 1
     _txt(img, up_lab_x, y, "UP", LABEL, size="tiny", role="label")
@@ -959,28 +1040,23 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         value_role="status",
         alert=_is_crit_disk_tile(disk),
     )
+    # TMP … °C flush-right (last ink on x1)
+    tmp_num = str(tmp_i)
+    tmp_x = _draw_val_unit_right(
+        img, x1, y, tmp_num, "°C", tmp_col, size="tiny", value_role="status"
+    )
     _txt(
         img,
-        lab_r,
+        tmp_x - lab_w - 2,
         y,
         "TMP",
         RED if tmp_hot else LABEL,
         size="tiny",
         role="status" if tmp_hot else "label",
     )
-    _draw_val_unit(
-        img,
-        lab_r + lab_w + 2,
-        y,
-        str(tmp_i),
-        "°C",
-        tmp_col,
-        size="tiny",
-        value_role="status",
-    )
     y += step
 
-    # 5) Wi 15/17 …… LAN1234 (LAN block right-justified → "4" on last pixel)
+    # 5) Wi 15/17 …… LAN1234 (LAN flush-right → "4" ink on last pixel)
     clients = int(m.get("clients", 0) or 0)
     wifi = int(m.get("clients_wifi", 0) or 0)
     ports = list(m.get("lan_ports") or [False, False, False, False])[:4]
@@ -992,8 +1068,8 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     x = _txt(img, x, y, str(wifi), GREEN, size="tiny", role="status")
     x = _txt(img, x, y, "/", HEADER, size="tiny", role="status")
     x = _txt(img, x, y, str(clients), GREEN, size="tiny", role="status")
-    lan_w = pf.text_width("LAN", size="tiny") + 4 * pf.text_width("0", size="tiny")
-    lx = x1 - lan_w + 1
+    lan_ink = pf.text_ink_width("LAN1234", size="tiny")
+    lx = x1 - lan_ink + 1
     lx = _txt(img, lx, y, "LAN", LABEL, size="tiny", role="label")
     for i, up in enumerate(ports, start=1):
         lx = _txt(img, lx, y, str(i), GREEN if up else RED, size="tiny", role="status")
@@ -1009,8 +1085,8 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     usb = m.get("usb") or {}
     u2 = bool(usb2.get("present") or usb.get("present"))
     u3 = bool(usb3.get("present"))
-    usb_w = pf.text_width("USB", size="tiny") + 2 * pf.text_width("0", size="tiny")
-    ux = x1 - usb_w + 1
+    usb_ink = pf.text_ink_width("USB23", size="tiny")
+    ux = x1 - usb_ink + 1
     ux = _txt(img, ux, y, "USB", LABEL, size="tiny", role="label")
     ux = _txt(img, ux, y, "2", GREEN if u2 else RED, size="tiny", role="status")
     _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
@@ -1056,7 +1132,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         host_col = _top_hostname_color(cd, cu)
         rate_col = _wan_link_color(rate, cap)
         _txt(img, x0, y, tag, tag_cols.get(tag, FG), size="tiny", role="status")
-        rate_w = _rate_pixel_width(rate)
+        rate_w = _rate_ink_width(rate)
         name_x = x0 + pf.text_width(tag, size="tiny") + 2
         max_name_w = max(0, x1 - rate_w - 2 - name_x + 1)
         shown = _truncate_to_width(str(name), max_name_w)
