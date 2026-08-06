@@ -673,6 +673,8 @@ def _demo_metrics() -> dict[str, Any]:
         "wan_up": round(up, 2),
         "wan_history_down": hist_d,
         "wan_history_up": hist_u,
+        "wan_history_max_down": max(hist_d) if hist_d else 1.0,
+        "wan_history_max_up": max(hist_u) if hist_u else 1.0,
         "cpu_history": [40 + 30 * abs(math.sin((t - i) / 9)) for i in range(32)],
         "ram_history": [50 + 20 * abs(math.sin((t - i) / 11)) for i in range(32)],
         "temp_history": [50 + 10 * abs(math.sin((t - i) / 15)) for i in range(32)],
@@ -963,8 +965,46 @@ def _client_dir_rate(down_mbps: float, up_mbps: float, tag: str) -> tuple[float,
     return float(down_mbps), _WAN_MAX_DOWN_MBPS
 
 
+def _wan_history_peaks(m: dict[str, Any]) -> tuple[float, float]:
+    """Peak WAN down/up (Mbps) from history max fields or series."""
+    def _peak(key_max: str, key_hist: str, key_cur: str) -> float:
+        v = float(m.get(key_max) or 0)
+        if v > 0:
+            return v
+        hist = m.get(key_hist) or []
+        try:
+            vals = [float(x) for x in hist]
+        except (TypeError, ValueError):
+            vals = []
+        if vals:
+            return float(max(vals))
+        return float(m.get(key_cur) or 0)
+
+    return (
+        _peak("wan_history_max_down", "wan_history_down", "wan_down"),
+        _peak("wan_history_max_up", "wan_history_up", "wan_up"),
+    )
+
+
+def _peak_rate_token(mbps: float) -> tuple[str, str]:
+    """Compact peak number + unit (prefer integers: 2M not 2.0M)."""
+    v = float(mbps or 0)
+    if v >= 1000:
+        g = v / 1000.0
+        return (f"{g:.0f}" if abs(g - round(g)) < 0.05 else f"{g:.1f}"), "G"
+    if v >= 100:
+        return f"{v:.0f}", "M"
+    if v >= 1:
+        if abs(v - round(v)) < 0.05:
+            return f"{int(round(v))}", "M"
+        return f"{v:.1f}", "M"
+    if v >= 0.001:
+        return f"{v * 1000:.0f}", "K"
+    return "0", "K"
+
+
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """Full-bleed summary: edge-to-edge (x=0..63), DWN first; 3 top hosts after Hot."""
+    """Full-bleed summary: DWN first; 2 top hosts; footer uptime/WAN + 2G/5G + peaks."""
     sys_hp = _system_health_score(m)
     net_sat = _network_saturation(m)
     sys_col = _sys_health_color(sys_hp)
@@ -1116,11 +1156,11 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         _txt(img, _right_x("--"), y, "--", DIM, size="tiny", role="status")
     y += step
 
-    # 8) Exactly 3 top-client rows, immediately under Hot (no gap)
-    tops = _rank_clients_by_wan_util(m)[:3]
+    # 8) Two top-client rows under Hot
+    tops = _rank_clients_by_wan_util(m)[:2]
     tag_cols = {"D": GRAPH_DOWN, "U": ORANGE, "B": RED}
-    for i in range(3):
-        if y > 58:
+    for i in range(2):
+        if y > 52:
             break
         if i >= len(tops):
             _txt(img, x0, y, "-", DIM, size="tiny", role="status")
@@ -1139,6 +1179,80 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         _txt(img, name_x, y, shown, host_col, size="tiny", role="status")
         _draw_rate_right(img, x1, y, rate, color=rate_col)
         y += step
+
+    # 9) Footer: uptime(green)|WAN(red) · 2Gn 5Gn · peakDown/peakUp
+    if y > 58:
+        return
+    online = bool(m.get("wan_online"))
+    peak_d, peak_u = _wan_history_peaks(m)
+    dn, du = _peak_rate_token(peak_d)
+    un, uu = _peak_rate_token(peak_u)
+    # Nicest → most compact (64px is tight for full 100M/2M + 2G11 + 5G4).
+    pk_candidates = [f"{dn}{du}/{un}{uu}"]
+    if du == uu:
+        pk_candidates.append(f"{dn}/{un}{uu}")
+    pk_candidates.append(f"{dn}/{un}")
+
+    c2 = min(99, int(m.get("clients_2g", 0) or 0))
+    c5 = min(99, int(m.get("clients_5g", 0) or 0))
+    head = str(m.get("uptime_str", "--") or "--")[:7] if online else "WAN"
+
+    def _left_w(with_g: bool) -> int:
+        b2 = ("2G" if with_g else "2") + str(c2)
+        b5 = ("5G" if with_g else "5") + str(c5)
+        return (
+            pf.text_width(head, size="tiny")
+            + 1
+            + pf.text_width(b2, size="tiny")
+            + 1
+            + pf.text_width(b5, size="tiny")
+        )
+
+    chosen_pk = pk_candidates[-1]
+    with_g = False
+    pk_x = x1 - pf.text_ink_width(chosen_pk, size="tiny") + 1
+    # Prefer "2G"/"5G" with a peaked string that still has a unit; if too wide,
+    # drop the G letters to keep e.g. 100M/2M rather than a unitless 100/2.
+    found = False
+    for try_g in (True, False):
+        for pk in pk_candidates:
+            if try_g and pk[-1].isdigit():
+                continue
+            px = x1 - pf.text_ink_width(pk, size="tiny") + 1
+            if px >= _left_w(try_g) - 1:
+                chosen_pk, with_g, pk_x = pk, try_g, px
+                found = True
+                break
+        if found:
+            break
+    if not found:
+        for try_g in (True, False):
+            for pk in pk_candidates:
+                px = x1 - pf.text_ink_width(pk, size="tiny") + 1
+                if px >= _left_w(try_g) - 1:
+                    chosen_pk, with_g, pk_x = pk, try_g, px
+                    found = True
+                    break
+            if found:
+                break
+
+    x = x0
+    if online:
+        x = _txt(img, x, y, head, GREEN, size="tiny", role="status")
+    else:
+        x = _txt(img, x, y, head, RED, size="tiny", role="status", alert=True)
+    x += 1
+    for pref, digits in (
+        (("2G" if with_g else "2"), str(c2)),
+        (("5G" if with_g else "5"), str(c5)),
+    ):
+        band_w = pf.text_width(pref + digits, size="tiny")
+        if x + band_w - 1 >= pk_x:
+            break
+        x = _txt(img, x, y, pref, LABEL, size="tiny", role="label")
+        x = _txt(img, x, y, digits, GREEN, size="tiny", role="status")
+        x += 1
+    _txt(img, pk_x, y, chosen_pk, FG, size="tiny", role="status")
 
 
 def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
