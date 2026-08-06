@@ -163,6 +163,8 @@ start_bridge() {
   BLINK_PERIOD="${PIXOO_BLINK_PERIOD:-0.55}"
   RATE_STYLE="${PIXOO_RATE_STYLE:-short}"
   WLC_GRAPH="${PIXOO_WLC_GRAPH_MODE:-overlay}"
+  WAN_MAX_DOWN="${PIXOO_WAN_MAX_DOWN_MBPS:-190}"
+  WAN_MAX_UP="${PIXOO_WAN_MAX_UP_MBPS:-12}"
   SCREENS="${PIXOO_SCREENS:-all}"
 
   export PYTHONPATH="${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
@@ -182,6 +184,8 @@ start_bridge() {
     --blink-period "${BLINK_PERIOD}" \
     --rate-style "${RATE_STYLE}" \
     --wlc-graph-mode "${WLC_GRAPH}" \
+    --wan-max-down "${WAN_MAX_DOWN}" \
+    --wan-max-up "${WAN_MAX_UP}" \
     --screens "${SCREENS}" \
     >> "${BRIDGE_LOG}" 2>&1 &
   echo $! > "${BRIDGE_PIDFILE}"

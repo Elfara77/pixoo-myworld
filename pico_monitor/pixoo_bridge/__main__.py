@@ -122,6 +122,18 @@ def main(argv: list[str] | None = None) -> int:
         help="WLC screen: overlay=down+up same graph; split=down left, up right",
     )
     ap.add_argument(
+        "--wan-max-down",
+        type=float,
+        default=float(env.get("PIXOO_WAN_MAX_DOWN_MBPS", "190")),
+        help="WAN download saturation cap Mbps (SUM Net health / Top ranking)",
+    )
+    ap.add_argument(
+        "--wan-max-up",
+        type=float,
+        default=float(env.get("PIXOO_WAN_MAX_UP_MBPS", "12")),
+        help="WAN upload saturation cap Mbps (SUM Net health / Top ranking)",
+    )
+    ap.add_argument(
         "--frame-interval",
         type=float,
         default=float(env.get("PIXOO_FRAME_INTERVAL", "1.05")),
@@ -183,12 +195,14 @@ def main(argv: list[str] | None = None) -> int:
         heavy_screen_dwell=heavy_dwell,
         heavy_screen_multiplier=args.heavy_screen_multiplier,
         wlc_graph_mode=args.wlc_graph_mode,
+        wan_max_down_mbps=args.wan_max_down,
+        wan_max_up_mbps=args.wan_max_up,
     )
     screens = get_screen_ids()
 
     _setup_logging(args.log)
     LOG.info(
-        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s heavy_dwell=%s heavy_x=%s wlc_graph=%s frame_s=%s color=%s scroll=%s blink=%s rate=%s screens=%s",
+        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s heavy_dwell=%s heavy_x=%s wlc_graph=%s wan_max=%.0f/%.0f frame_s=%s color=%s scroll=%s blink=%s rate=%s screens=%s",
         args.pixoo,
         args.metrics,
         args.demo,
@@ -197,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         heavy_dwell,
         args.heavy_screen_multiplier,
         args.wlc_graph_mode,
+        args.wan_max_down,
+        args.wan_max_up,
         args.frame_interval,
         args.color_mode,
         scroll_on,

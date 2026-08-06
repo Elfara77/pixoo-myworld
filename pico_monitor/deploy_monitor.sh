@@ -54,6 +54,8 @@ PIXOO_ALERT_BLINK="${PIXOO_ALERT_BLINK:-1}"
 PIXOO_BLINK_PERIOD="${PIXOO_BLINK_PERIOD:-0.55}"
 PIXOO_RATE_STYLE="${PIXOO_RATE_STYLE:-short}"
 PIXOO_WLC_GRAPH_MODE="${PIXOO_WLC_GRAPH_MODE:-overlay}"
+PIXOO_WAN_MAX_DOWN_MBPS="${PIXOO_WAN_MAX_DOWN_MBPS:-190}"
+PIXOO_WAN_MAX_UP_MBPS="${PIXOO_WAN_MAX_UP_MBPS:-12}"
 PIXOO_SCREENS="${PIXOO_SCREENS:-all}"
 
 REMOTE_PATH_ENV='export PATH=/opt/bin:/opt/sbin:/opt/usr/bin:/bin:/sbin:/usr/bin:/usr/sbin'
@@ -150,6 +152,8 @@ PIXOO_ALERT_BLINK=${PIXOO_ALERT_BLINK}
 PIXOO_BLINK_PERIOD=${PIXOO_BLINK_PERIOD}
 PIXOO_RATE_STYLE=${PIXOO_RATE_STYLE}
 PIXOO_WLC_GRAPH_MODE=${PIXOO_WLC_GRAPH_MODE}
+PIXOO_WAN_MAX_DOWN_MBPS=${PIXOO_WAN_MAX_DOWN_MBPS}
+PIXOO_WAN_MAX_UP_MBPS=${PIXOO_WAN_MAX_UP_MBPS}
 PIXOO_SCREENS=${PIXOO_SCREENS}
 EOF
   cp -f "${CFG_PROJECT}" "${CFG_HOME}"
@@ -429,6 +433,8 @@ visual_defaults() {
   PIXOO_FRAME_INTERVAL="1.05"
   PIXOO_RATE_STYLE="short"
   PIXOO_WLC_GRAPH_MODE="overlay"
+  PIXOO_WAN_MAX_DOWN_MBPS="190"
+  PIXOO_WAN_MAX_UP_MBPS="12"
   PIXOO_SCREENS="all"
 }
 
@@ -470,6 +476,7 @@ print_visual_profile() {
   │  Rafraîchissement  : ${PIXOO_FRAME_INTERVAL}s  (push HTTP frame)
   │  Unités débit      : ${PIXOO_RATE_STYLE}  (short=K/M/G · long=Kb/s)
   │  Graphes trafic    : ${PIXOO_WLC_GRAPH_MODE}  (overlay=same · split=gauche/droite)
+  │  WAN max Down/Up   : ${PIXOO_WAN_MAX_DOWN_MBPS}/${PIXOO_WAN_MAX_UP_MBPS} M  (SUM Net)
   │  Écrans actifs     : ${nscr}
   └───────────────────────────────────────────
 EOF
@@ -500,6 +507,7 @@ configure_visual() {
   local _bp="${PIXOO_BLINK_PERIOD}" _br="${PIXOO_BRIGHTNESS}" _ss="${PIXOO_SCREEN_SECONDS}"
   local _hd="${PIXOO_HEAVY_SCREEN_DWELL}" _hm="${PIXOO_HEAVY_SCREEN_MULTIPLIER}"
   local _fi="${PIXOO_FRAME_INTERVAL}" _rs="${PIXOO_RATE_STYLE}" _wg="${PIXOO_WLC_GRAPH_MODE}"
+  local _wd="${PIXOO_WAN_MAX_DOWN_MBPS}" _wu="${PIXOO_WAN_MAX_UP_MBPS}"
   local _sc="${PIXOO_SCREENS}"
   visual_defaults
   print_visual_profile
@@ -515,6 +523,8 @@ configure_visual() {
   PIXOO_FRAME_INTERVAL="${_fi}"
   PIXOO_RATE_STYLE="${_rs}"
   PIXOO_WLC_GRAPH_MODE="${_wg}"
+  PIXOO_WAN_MAX_DOWN_MBPS="${_wd}"
+  PIXOO_WAN_MAX_UP_MBPS="${_wu}"
   PIXOO_SCREENS="${_sc:-all}"
 
   echo ""
@@ -547,6 +557,8 @@ configure_visual() {
       PIXOO_FRAME_INTERVAL="$(_ask_choice "Intervalle refresh HTTP (s)" "${PIXOO_FRAME_INTERVAL}" '^[0-9]+([.][0-9]+)?$')"
       PIXOO_RATE_STYLE="$(_ask_choice "Unités débit short|long" "${PIXOO_RATE_STYLE}" '^(short|long)$')"
       PIXOO_WLC_GRAPH_MODE="$(_ask_choice "Graphes trafic overlay|split" "${PIXOO_WLC_GRAPH_MODE}" '^(overlay|split)$')"
+      PIXOO_WAN_MAX_DOWN_MBPS="$(_ask_choice "WAN max Down (Mbps, SUM)" "${PIXOO_WAN_MAX_DOWN_MBPS}" '^[0-9]+([.][0-9]+)?$')"
+      PIXOO_WAN_MAX_UP_MBPS="$(_ask_choice "WAN max Up (Mbps, SUM)" "${PIXOO_WAN_MAX_UP_MBPS}" '^[0-9]+([.][0-9]+)?$')"
       echo ""
       echo "Nouveau profil :"
       print_visual_profile
@@ -730,6 +742,8 @@ apply_visual_remote() {
     _set PIXOO_BLINK_PERIOD '${PIXOO_BLINK_PERIOD}'
     _set PIXOO_RATE_STYLE '${PIXOO_RATE_STYLE}'
     _set PIXOO_WLC_GRAPH_MODE '${PIXOO_WLC_GRAPH_MODE}'
+    _set PIXOO_WAN_MAX_DOWN_MBPS '${PIXOO_WAN_MAX_DOWN_MBPS}'
+    _set PIXOO_WAN_MAX_UP_MBPS '${PIXOO_WAN_MAX_UP_MBPS}'
     _set PIXOO_SCREENS '${PIXOO_SCREENS}'
     echo 'config.env updated'
   "
@@ -792,7 +806,7 @@ upload() {
 
 install_remote() {
   echo "==> remote install (opkg python3+pillow + cru + metrics + Pixoo bridge)"
-  remote "PICO_METRICS_PORT=${METRICS_PORT} PIXOO_IP=${PIXOO_IP} PIXOO_BRIGHTNESS=${PIXOO_BRIGHTNESS} PIXOO_SCREEN_SECONDS=${PIXOO_SCREEN_SECONDS} PIXOO_HEAVY_SCREEN_DWELL=${PIXOO_HEAVY_SCREEN_DWELL} PIXOO_HEAVY_SCREEN_MULTIPLIER=${PIXOO_HEAVY_SCREEN_MULTIPLIER} PIXOO_FRAME_INTERVAL=${PIXOO_FRAME_INTERVAL} PIXOO_COLOR_MODE=${PIXOO_COLOR_MODE} PIXOO_TEXT_SCROLL=${PIXOO_TEXT_SCROLL} PIXOO_ALERT_BLINK=${PIXOO_ALERT_BLINK} PIXOO_BLINK_PERIOD=${PIXOO_BLINK_PERIOD} PIXOO_RATE_STYLE=${PIXOO_RATE_STYLE} PIXOO_WLC_GRAPH_MODE=${PIXOO_WLC_GRAPH_MODE} PIXOO_SCREENS=${PIXOO_SCREENS} /bin/sh '${REMOTE_PATH}/install.sh'"
+  remote "PICO_METRICS_PORT=${METRICS_PORT} PIXOO_IP=${PIXOO_IP} PIXOO_BRIGHTNESS=${PIXOO_BRIGHTNESS} PIXOO_SCREEN_SECONDS=${PIXOO_SCREEN_SECONDS} PIXOO_HEAVY_SCREEN_DWELL=${PIXOO_HEAVY_SCREEN_DWELL} PIXOO_HEAVY_SCREEN_MULTIPLIER=${PIXOO_HEAVY_SCREEN_MULTIPLIER} PIXOO_FRAME_INTERVAL=${PIXOO_FRAME_INTERVAL} PIXOO_COLOR_MODE=${PIXOO_COLOR_MODE} PIXOO_TEXT_SCROLL=${PIXOO_TEXT_SCROLL} PIXOO_ALERT_BLINK=${PIXOO_ALERT_BLINK} PIXOO_BLINK_PERIOD=${PIXOO_BLINK_PERIOD} PIXOO_RATE_STYLE=${PIXOO_RATE_STYLE} PIXOO_WLC_GRAPH_MODE=${PIXOO_WLC_GRAPH_MODE} PIXOO_WAN_MAX_DOWN_MBPS=${PIXOO_WAN_MAX_DOWN_MBPS} PIXOO_WAN_MAX_UP_MBPS=${PIXOO_WAN_MAX_UP_MBPS} PIXOO_SCREENS=${PIXOO_SCREENS} /bin/sh '${REMOTE_PATH}/install.sh'"
   echo "Install OK — metrics: http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json"
   echo "           — Pixoo bridge → ${PIXOO_IP} (daemon on Merlin)"
 }

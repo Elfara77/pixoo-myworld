@@ -44,11 +44,13 @@ cd pico_monitor
 | `PIXOO_HEAVY_SCREEN_DWELL` / `--heavy-screen-dwell` | `1` | `1` = LOD/TMP/GRP/WLC/TOP/CLI restent ×2 plus longtemps ; `0` = même durée pour tous |
 | `PIXOO_HEAVY_SCREEN_MULTIPLIER` / `--heavy-screen-multiplier` | `2` | Multiplicateur sur les écrans « lourds » (graphes, listes) |
 | `PIXOO_WLC_GRAPH_MODE` / `--wlc-graph-mode` | `overlay` | GRP WAN + WiFi/Eth : `overlay` = down+up même graphe ; `split` = down à gauche, up à droite |
+| `PIXOO_WAN_MAX_DOWN_MBPS` / `--wan-max-down` | `190` | Cap saturation download (Mbps) pour santé Net SUM + classement Top |
+| `PIXOO_WAN_MAX_UP_MBPS` / `--wan-max-up` | `12` | Cap saturation upload (Mbps) pour santé Net SUM + classement Top |
 | `PIXOO_FRAME_INTERVAL` / `--frame-interval` | `1.05` | Intervalle minimum entre pushes HTTP |
 | `PIXOO_BRIGHTNESS` / `--brightness` | `50` | Luminosité Pixoo 0–100 |
 | `PIXOO_SCREENS` / `--screens` | `all` | `all` = défauts **sans SUM**. Optionnel : `SUM` (résumé santé, sans bannière), seul ou mélangé (`all,SUM` / `SUM,SYS,…`). Pastille position si >1 écran (sauf SUM qui n’a pas de bannière). |
 
-Ordre logique défaut : System → Load → Temps → Traffic → WiFi/LAN → Top → Clients → Ports → Disk → Services. **SUM** = résumé sans bannière : **Sys%** (CPU/RAM/TMP/DSK) + **Net%** (down/up/clients), puis métriques détaillées ; non inclus dans `all`.
+Ordre logique défaut : System → Load → Temps → Traffic → WiFi/LAN → Top → Clients → Ports → Disk → Services. **SUM** = résumé sans bannière : **SYS%** (CPU/RAM/TMP/DSK) + **NET%** (santé = 100−saturation WAN/clients ; jauge Net = saturation), puis métriques + LAN/WiFi/DWN/Top ; non inclus dans `all`.
 
 ## Probe
 

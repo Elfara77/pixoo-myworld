@@ -75,6 +75,12 @@ _RATE_STYLE = "short"
 # WLC WiFi/Eth + GRP WAN graphs: overlay = down+up same panel; split = down left, up right.
 _WLC_GRAPH_MODE = "overlay"
 
+# WAN saturation caps (Mbps) for SUM Net health / Top relative ranking.
+_WAN_MAX_DOWN_MBPS = 190.0
+_WAN_MAX_UP_MBPS = 12.0
+# Soft client count at which Net client-load factor reaches 100% saturation.
+_NET_CLIENTS_SOFT = 24.0
+
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
 HEAVY_SCREEN_IDS = frozenset({"LOD", "GRP", "WLC", "TOP", "CLI", "TMP", "SUM"})
 _HEAVY_DWELL = True
@@ -128,9 +134,12 @@ def set_render_options(
     heavy_screen_dwell: bool | None = None,
     heavy_screen_multiplier: float | None = None,
     wlc_graph_mode: str | None = None,
+    wan_max_down_mbps: float | None = None,
+    wan_max_up_mbps: float | None = None,
 ) -> None:
     global _COLOR_MODE, _TEXT_SCROLL, _ALERT_BLINK, _BLINK_PERIOD_S, _RATE_STYLE
     global _HEAVY_DWELL, _HEAVY_DWELL_MULT, _WLC_GRAPH_MODE
+    global _WAN_MAX_DOWN_MBPS, _WAN_MAX_UP_MBPS
     if color_mode is not None:
         mode = color_mode.strip().lower()
         if mode in ("mono", "monochrome", "bw"):
@@ -160,6 +169,10 @@ def set_render_options(
             _WLC_GRAPH_MODE = "split"
         else:
             _WLC_GRAPH_MODE = "overlay"
+    if wan_max_down_mbps is not None:
+        _WAN_MAX_DOWN_MBPS = max(0.1, float(wan_max_down_mbps))
+    if wan_max_up_mbps is not None:
+        _WAN_MAX_UP_MBPS = max(0.1, float(wan_max_up_mbps))
 
 
 def _blink_on() -> bool:
@@ -171,9 +184,8 @@ def _blink_on() -> bool:
 
 
 def _resolve_label_color(color: Sequence[int], *, negligible: bool = False) -> tuple[int, int, int]:
-    """Banner cyan for active labels; dim if negligible; explicit colors (e.g. RED) kept."""
-    if negligible:
-        return DIM
+    """Banner cyan for labels; never grey (negligible applies to values only)."""
+    del negligible  # labels stay banner-colored
     if tuple(int(c) for c in color) == LABEL:
         return HEADER
     return (int(color[0]), int(color[1]), int(color[2]))
@@ -194,10 +206,8 @@ def _txt_label(
     negligible: bool = False,
     mbps: float | None = None,
 ) -> int:
-    neg = negligible if mbps is None else _rate_is_negligible(mbps)
-    return _txt(
-        img, x, y, text, LABEL, size="tiny", role="label", alert=alert, label_negligible=neg
-    )
+    del negligible, mbps  # labels never grey
+    return _txt(img, x, y, text, LABEL, size="tiny", role="label", alert=alert)
 
 
 def _ink(color: Sequence[int], *, role: str = "value") -> tuple[int, int, int]:
@@ -373,6 +383,41 @@ def _draw_rate(
     return _draw_val_unit(
         img, x, y, num, unit, col, size=size, value_role="status", alert=alert
     )
+
+
+def _rate_pixel_width(mbps: float, *, size: str = "tiny") -> int:
+    num, unit = _split_rate(mbps)
+    w = pf.text_width(num, size=size)
+    if unit:
+        w += 1 + pf.text_width(unit, size=size)
+    return w
+
+
+def _draw_rate_right(
+    img,
+    right: int,
+    y: int,
+    mbps: float,
+    *,
+    size: str = "tiny",
+) -> int:
+    """Draw rate ending at `right` (inclusive edge). Returns start x."""
+    w = _rate_pixel_width(mbps, size=size)
+    x = max(0, right - w + 1)
+    _draw_rate(img, x, y, mbps, size=size)
+    return x
+
+
+def _truncate_to_width(text: str, max_w: int, *, size: str = "tiny") -> str:
+    if max_w <= 0:
+        return ""
+    out = ""
+    for ch in text:
+        trial = out + ch
+        if pf.text_width(trial, size=size) > max_w:
+            break
+        out = trial
+    return out
 
 
 def _draw_val_unit(
@@ -589,6 +634,7 @@ def _demo_metrics() -> dict[str, Any]:
         "temp_5g": 52,
         "vpn1": {"on": True, "type": "OVPN"},
         "vpn2": {"on": False, "type": "WG"},
+        "vpn3": {"on": False, "type": "VPN"},
         "jffs": {"used": 22, "total": 100, "present": True},
         "usb": {"used": 81, "total": 100, "present": True},
         "usb2": {"present": True, "used": 40},
@@ -628,10 +674,13 @@ def _active_vpns(m: dict[str, Any]) -> list[tuple[str, str]]:
 
 def _vpn_slots(m: dict[str, Any]) -> list[tuple[str, bool, str]]:
     slots: list[tuple[str, bool, str]] = []
-    for key, fallback in (("vpn1", "VPN1"), ("vpn2", "VPN2")):
+    defaults = ("OVPN", "WG", "VPN")
+    for i, (key, fallback) in enumerate(
+        (("vpn1", "VPN1"), ("vpn2", "VPN2"), ("vpn3", "VPN3"))
+    ):
         v = m.get(key) or {}
         on = bool(v.get("on"))
-        typ = str(v.get("type", "OVPN" if key == "vpn1" else "WG"))[:4]
+        typ = str(v.get("type", defaults[i]))[:4]
         slots.append((fallback, on, typ))
     return slots
 
@@ -670,6 +719,7 @@ def _temp_score(temp: float, *, kind: str = "temp_cpu") -> float:
 
 
 def _health_color(score: float) -> tuple[int, int, int]:
+    """Generic health: green high, yellow mid, red low."""
     s = float(score or 0)
     if s >= 70:
         return GREEN
@@ -678,8 +728,28 @@ def _health_color(score: float) -> tuple[int, int, int]:
     return RED
 
 
+def _sys_health_color(score: float) -> tuple[int, int, int]:
+    """SYS health: green good, yellow mid, red if <30%."""
+    s = float(score or 0)
+    if s < 30:
+        return RED
+    if s < 70:
+        return YELLOW
+    return GREEN
+
+
+def _net_sat_color(sat: float) -> tuple[int, int, int]:
+    """Net saturation fill/value color: green <40, yellow 40–70, red ≥70."""
+    s = float(sat or 0)
+    if s < 40:
+        return GREEN
+    if s < 70:
+        return YELLOW
+    return RED
+
+
 def _system_health_score(m: dict[str, Any]) -> int:
-    """0–100 from CPU, RAM, temperature, disk (no WAN)."""
+    """0–100 from CPU, RAM, temperature, disk (100 = healthy)."""
     cpu = float(m.get("cpu", 0) or 0)
     ram = float(m.get("ram", 0) or 0)
     t_cpu = float(m.get("temp_cpu", 0) or 0)
@@ -691,24 +761,27 @@ def _system_health_score(m: dict[str, Any]) -> int:
     temp_s = min(_temp_score(t_cpu, kind="temp_cpu"), _temp_score(t_avg, kind="temp"))
     disk_s = max(0.0, 100.0 - disk)
 
-    score = 0.30 * cpu_s + 0.25 * ram_s + 0.25 * temp_s + 0.20 * disk_s
+    score = 0.50 * cpu_s + 0.30 * ram_s + 0.10 * temp_s + 0.10 * disk_s
     return int(round(max(0.0, min(100.0, score))))
 
 
-def _network_health_score(m: dict[str, Any]) -> int:
-    """0–100 from WAN up, download/upload activity, client count."""
+def _network_saturation(m: dict[str, Any]) -> float:
+    """0–100 WAN/client load (100 = saturated / worst)."""
     if not bool(m.get("wan_online")):
-        return 0
+        return 100.0
     wan_down = float(m.get("wan_down", 0) or 0)
     wan_up = float(m.get("wan_up", 0) or 0)
     clients = int(m.get("clients", 0) or 0)
+    down_u = min(1.0, wan_down / _WAN_MAX_DOWN_MBPS)
+    up_u = min(1.0, wan_up / _WAN_MAX_UP_MBPS)
+    cli_u = min(1.0, clients / max(1.0, _NET_CLIENTS_SOFT))
+    return 100.0 * (down_u + up_u + cli_u) / 3.0
 
-    down_s = 100.0 if not _rate_is_negligible(wan_down) else 85.0
-    up_s = 100.0 if not _rate_is_negligible(wan_up) else 85.0
-    cli_s = min(100.0, max(70.0, 70.0 + min(clients, 12) * 2.5))
 
-    score = (down_s + up_s + cli_s) / 3.0
-    return int(round(max(0.0, min(100.0, score))))
+def _network_health_score(m: dict[str, Any]) -> int:
+    """0–100 network health (100 = healthy = low saturation)."""
+    sat = _network_saturation(m)
+    return int(round(max(0.0, min(100.0, 100.0 - sat))))
 
 
 def _health_score(m: dict[str, Any]) -> int:
@@ -716,28 +789,38 @@ def _health_score(m: dict[str, Any]) -> int:
     return int(round((_system_health_score(m) + _network_health_score(m)) / 2.0))
 
 
-def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """Full-bleed summary (no title banner): system + network health % and live metrics."""
-    sys_hp = _system_health_score(m)
-    net_hp = _network_health_score(m)
-    sys_col = _health_color(sys_hp)
-    net_col = _health_color(net_hp)
-    alert_sys = sys_hp < 40
-    alert_net = net_hp < 40
+def _pick_top_by_wan_util(m: dict[str, Any]) -> tuple[str, float] | None:
+    """Client with highest util vs WAN max down/up (not WiFi PHY max)."""
+    best: tuple[str, float, float] | None = None  # name, rate, util
+    for name, rate in _pick_top(m.get("top_down"), limit=5):
+        util = float(rate) / _WAN_MAX_DOWN_MBPS
+        if best is None or util > best[2]:
+            best = (name, float(rate), util)
+    for name, rate in _pick_top(m.get("top_up"), limit=5):
+        util = float(rate) / _WAN_MAX_UP_MBPS
+        if best is None or util > best[2]:
+            best = (name, float(rate), util)
+    if not best:
+        return None
+    return best[0], best[1]
 
-    _txt(img, 1, 1, "Sys", LABEL, size="tiny", role="label", alert=alert_sys)
-    _draw_val_unit(
-        img, 16, 0, str(sys_hp), "%", sys_col, size="tiny", value_role="status", alert=alert_sys
-    )
-    _txt(img, 32, 1, "Net", LABEL, size="tiny", role="label", alert=alert_net)
-    _draw_val_unit(
-        img, 47, 0, str(net_hp), "%", net_col, size="tiny", value_role="status", alert=alert_net
-    )
-    online = bool(m.get("wan_online"))
-    if online or not _ALERT_BLINK or _blink_on():
-        d.ellipse([57, 1, 62, 6], fill=GREEN if online else RED)
-    _gauge(d, 1, 9, 30, sys_hp, sys_col, alert=alert_sys)
-    _gauge(d, 33, 9, 30, net_hp, net_col, alert=alert_net)
+
+def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
+    """Full-bleed summary: SYS/NET health, metrics, then LAN → WiFi → DWN/UP → Top."""
+    sys_hp = _system_health_score(m)
+    net_sat = _network_saturation(m)
+    net_hp = int(round(max(0.0, min(100.0, 100.0 - net_sat))))
+    sys_col = _sys_health_color(sys_hp)
+    net_col = _net_sat_color(net_sat)
+
+    # Header: SYS / NET % aligned on same baseline (no WAN blob)
+    _txt(img, 1, 1, "SYS", LABEL, size="tiny", role="label")
+    _draw_val_unit(img, 16, 1, str(sys_hp), "%", sys_col, size="tiny", value_role="status")
+    _txt(img, 33, 1, "NET", LABEL, size="tiny", role="label")
+    _draw_val_unit(img, 48, 1, str(net_hp), "%", net_col, size="tiny", value_role="status")
+    # SYS gauge fills with health; NET gauge fills with saturation (inverted feel)
+    _gauge(d, 1, 9, 30, sys_hp, sys_col, alert=False)
+    _gauge(d, 33, 9, 30, net_sat, net_col, alert=False)
 
     cpu = float(m.get("cpu", 0) or 0)
     ram = float(m.get("ram", 0) or 0)
@@ -766,17 +849,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         if temp_hot:
             _txt(img, 1, y, label, RED, size="tiny", role="status")
         else:
-            _txt(
-                img,
-                1,
-                y,
-                label,
-                LABEL,
-                size="tiny",
-                role="label",
-                alert=blink_alert,
-                label_negligible=(kind == "temp_cpu" and int(val) == 0),
-            )
+            _txt(img, 1, y, label, LABEL, size="tiny", role="label", alert=blink_alert)
         _draw_val_unit(
             img, 16, y, str(int(val)), unit, col, size="tiny", value_role="status", alert=blink_alert
         )
@@ -784,58 +857,81 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         _gauge(d, 36, y + 1, 27, bar_pct, col, alert=blink_alert)
         y += 6
 
-    _txt(img, 1, y, "Dn", LABEL, size="tiny", role="label", label_negligible=_rate_is_negligible(m.get("wan_down", 0)))
-    x = _draw_rate(img, 12, y, m.get("wan_down", 0))
-    _txt(
-        img,
-        min(x + 2, 34),
-        y,
-        "Up",
-        LABEL,
-        size="tiny",
-        role="label",
-        label_negligible=_rate_is_negligible(m.get("wan_up", 0)),
-    )
-    _draw_rate(img, min(x + 12, 44), y, m.get("wan_up", 0))
-    y += 6
-
-    clients = int(m.get("clients", 0) or 0)
-    wifi = int(m.get("clients_wifi", 0) or 0)
-    _txt(img, 1, y, "Cli", LABEL, size="tiny", role="label")
-    _draw_client_count(img, 14, y, clients)
-    _txt(img, 28, y, "Wi", LABEL, size="tiny", role="label")
-    _draw_client_count(img, 38, y, wifi)
-    vpns = _active_vpns(m)
-    if vpns:
-        _txt(img, 48, y, "V", GREEN, size="tiny", role="status")
-    y += 6
-
+    # 1) LAN1234 …… USB23
     ports = list(m.get("lan_ports") or [False, False, False, False])[:4]
     while len(ports) < 4:
         ports.append(False)
-    _txt(img, 1, y, "L", LABEL, size="tiny", role="label")
-    x = 8
+    _txt(img, 1, y, "LAN", LABEL, size="tiny", role="label")
+    x = 1 + pf.text_width("LAN", size="tiny")
     for i, up in enumerate(ports, start=1):
         _txt(img, x, y, str(i), GREEN if up else RED, size="tiny", role="status")
-        x += 6
+        x += pf.text_width(str(i), size="tiny")
     usb2 = m.get("usb2") or {}
     usb3 = m.get("usb3") or {}
     usb = m.get("usb") or {}
     u2 = bool(usb2.get("present") or usb.get("present"))
     u3 = bool(usb3.get("present"))
-    _txt(img, 34, y, "U2", GREEN if u2 else RED, size="tiny", role="status")
-    _txt(img, 48, y, "U3", GREEN if u3 else RED, size="tiny", role="status")
+    usb_blk = "USB"
+    d2, d3 = "2", "3"
+    usb_w = (
+        pf.text_width(usb_blk, size="tiny")
+        + pf.text_width(d2, size="tiny")
+        + pf.text_width(d3, size="tiny")
+    )
+    ux = 63 - usb_w + 1
+    ux = _txt(img, ux, y, usb_blk, LABEL, size="tiny", role="label")
+    ux = _txt(img, ux, y, d2, GREEN if u2 else RED, size="tiny", role="status")
+    _txt(img, ux, y, d3, GREEN if u3 else RED, size="tiny", role="status")
     y += 6
 
-    tops = _pick_top(m.get("top_down"), limit=1)
-    if tops:
-        name, rate = tops[0]
-        _txt(img, 1, y, _scroll(name, 7), FG, size="tiny", role="value")
-        _draw_rate(img, 38, y, rate)
+    # 2) WiFi wifi/total …… VPN123
+    clients = int(m.get("clients", 0) or 0)
+    wifi = int(m.get("clients_wifi", 0) or 0)
+    _txt(img, 1, y, "WiFi", LABEL, size="tiny", role="label")
+    ratio = f"{wifi}/{clients}"
+    _txt(
+        img,
+        1 + pf.text_width("WiFi", size="tiny") + 2,
+        y,
+        ratio,
+        GREEN if clients > 0 else DIM,
+        size="tiny",
+        role="status",
+    )
+    slots = _vpn_slots(m)
+    vpn_w = pf.text_width("VPN", size="tiny") + 3 * pf.text_width("0", size="tiny")
+    vx = 63 - vpn_w + 1
+    vx = _txt(img, vx, y, "VPN", LABEL, size="tiny", role="label")
+    for i, (_name, on, _typ) in enumerate(slots[:3], start=1):
+        vx = _txt(img, vx, y, str(i), GREEN if on else RED, size="tiny", role="status")
+    y += 6
+
+    # 3) DWN rate …… UP rate (right-justified)
+    down = float(m.get("wan_down", 0) or 0)
+    up = float(m.get("wan_up", 0) or 0)
+    _txt(img, 1, y, "DWN", LABEL, size="tiny", role="label")
+    _draw_rate(img, 1 + pf.text_width("DWN", size="tiny") + 2, y, down)
+    up_lab_w = pf.text_width("UP", size="tiny")
+    rate_w = _rate_pixel_width(up)
+    up_x = max(0, 63 - (up_lab_w + 2 + rate_w) + 1)
+    _txt(img, up_x, y, "UP", LABEL, size="tiny", role="label")
+    _draw_rate(img, up_x + up_lab_w + 2, y, up)
+    y += 6
+
+    # 4) Top hostname …… rate (right-justified); ranked vs WAN max down/up
+    top = _pick_top_by_wan_util(m)
+    _txt(img, 1, y, "Top", LABEL, size="tiny", role="label")
+    if top:
+        name, rate = top
+        rate_w = _rate_pixel_width(rate)
+        name_x = 1 + pf.text_width("Top", size="tiny") + 2
+        max_name_w = max(0, 63 - rate_w - 2 - name_x + 1)
+        shown = _truncate_to_width(str(name), max_name_w)
+        _txt(img, name_x, y, shown, FG, size="tiny", role="value")
+        _draw_rate_right(img, 63, y, rate)
     else:
         uptime = str(m.get("uptime_str", "--"))[:8]
-        _txt(img, 1, y, "up", LABEL, size="tiny", role="label")
-        _txt(img, 12, y, uptime, FG, size="tiny", role="value")
+        _txt(img, 1 + pf.text_width("Top", size="tiny") + 2, y, uptime, FG, size="tiny", role="value")
 
 
 def render_screen(m: dict[str, Any], idx: int) -> Image.Image:

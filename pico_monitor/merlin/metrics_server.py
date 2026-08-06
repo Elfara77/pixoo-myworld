@@ -470,7 +470,7 @@ def _lan_ports() -> list[bool]:
     return states[:4]
 
 
-def _vpn() -> tuple[dict, dict]:
+def _vpn() -> tuple[dict, dict, dict]:
     ovpn = _run("pidof vpnclient1 openvpn 2>/dev/null")
     st1 = _nvram("vpn_client1_state")
     on1 = bool(ovpn) or st1 in ("2", "connected", "1")
@@ -479,7 +479,10 @@ def _vpn() -> tuple[dict, dict]:
     wg = _run("pidof wg-quick wireguard 2>/dev/null") or _nvram("wgc1_addr")
     on2 = st2 in ("2", "connected", "1") or bool(wg and _nvram("wgc1_enable") in ("1", "on"))
     t2 = "WG" if (wg or "wg" in (_nvram("vpn_client2_desc") or "").lower()) else "VPN2"
-    return {"on": on1, "type": "OVPN"}, {"on": on2, "type": t2}
+    st3 = _nvram("vpn_client3_state") or _nvram("wgc2_enable")
+    on3 = st3 in ("2", "connected", "1") or _nvram("wgc2_enable") in ("1", "on")
+    t3 = "WG" if _nvram("wgc2_enable") in ("1", "on") else "VPN3"
+    return {"on": on1, "type": "OVPN"}, {"on": on2, "type": t2}, {"on": on3, "type": t3}
 
 
 def _top_clients_wifi(now: float) -> tuple[list, list]:
@@ -602,7 +605,7 @@ def collect() -> dict:
     usb_pct, usb_ok = _usb_pct()
     usb2, usb3 = _usb_ports()
     lan_ports = _lan_ports()
-    vpn1, vpn2 = _vpn()
+    vpn1, vpn2, vpn3 = _vpn()
     top_d, top_u = _top_clients_wifi(now)
     wan_state = _nvram("wan0_state_t") or _nvram("wan0_state")
     online = wan_state in ("2", "connected") or _run("ping -c 1 -W 1 1.1.1.1 >/dev/null && echo OK") == "OK"
@@ -649,6 +652,7 @@ def collect() -> dict:
         "temp_bands": _last.get("wl_temp_map", ""),
         "vpn1": vpn1,
         "vpn2": vpn2,
+        "vpn3": vpn3,
         "jffs": {"used": jffs_pct, "total": 100, "present": jffs_ok},
         "usb": {"used": usb_pct, "total": 100, "present": usb_ok},
         "usb2": usb2,
