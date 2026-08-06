@@ -177,8 +177,13 @@ def _uptime_str() -> str:
     rem_mins = total_mins % (24 * 60)
     hours = rem_mins // 60
     mins = rem_mins % 60
+    # Compact for 64px footer: avoid "12h40m"; days>9 → "123d" only.
+    if days > 9:
+        return f"{days}d"
     if days > 0:
         return f"{days}d{hours}h"
+    if hours > 9:
+        return f"0d{hours}h"
     if hours > 0:
         return f"{hours}h{mins:02d}m"
     return f"{mins}m"

@@ -91,6 +91,21 @@ _NET_SAT_SMOOTH: float | None = None
 # Short histories for SUM SYS/NET gauge trend arrows (last samples).
 _SYS_HP_HIST: list[float] = []
 _NET_SAT_HIST: list[float] = []
+# SUM bottom block: 2 dwells clients → 2 dwells WAN graph → repeat.
+_SUM_ALT_I = 0
+
+
+def advance_sum_alt_phase() -> None:
+    """Call once each time a SUM dwell ends (rotator leaves SUM)."""
+    global _SUM_ALT_I
+    _SUM_ALT_I += 1
+
+
+def sum_alt_show_wan_graph() -> bool:
+    """True for SUM dwells 3–4, 7–8, … (2 clients then 2 graph)."""
+    # Completed dwells 0,1 → clients; 2,3 → graph; …
+    return (_SUM_ALT_I // 2) % 2 == 1
+
 
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
 HEAVY_SCREEN_IDS = frozenset({"LOD", "GRP", "WLC", "TOP", "CLI", "TMP", "SUM", "SUM_GRAPH"})
@@ -259,21 +274,73 @@ def _txt(
 
 
 def _split_rate(mbps: float) -> tuple[str, str]:
-    """Return (number, unit) for emphasis. Short style is integer-only (no '.')."""
+    """Return (number, unit). Promote when >999: K→M→G→T (integer, no '.')."""
     v = float(mbps or 0)
+    if v <= 0:
+        return ("0", "Kb/s" if _RATE_STYLE == "long" else "K")
+
     if _RATE_STYLE == "long":
-        if v >= 1000:
-            return f"{int(round(v / 1000))}", "Gb/s"
-        if v >= 1:
-            return f"{int(round(v))}", "Mb/s"
-        return f"{int(round(v * 1000))}", "Kb/s"
-    if v >= 1000:
-        return f"{int(round(v / 1000))}", "G"
-    if v >= 1:
+        # Work in Kb/s then promote at >999
+        kb = v * 1000.0
+        if kb <= 999:
+            return f"{int(round(kb))}", "Kb/s"
+        mb = v
+        if mb <= 999:
+            return f"{int(round(mb))}", "Mb/s"
+        gb = v / 1000.0
+        if gb <= 999:
+            return f"{int(round(gb))}", "Gb/s"
+        tb = gb / 1000.0
+        return f"{max(1, int(round(tb)))}", "Tb/s"
+
+    # Short: K / M / G / T from Mbps
+    kb = v * 1000.0
+    if kb <= 999:
+        return f"{int(round(kb))}", "K"
+    if v <= 999:
         return f"{int(round(v))}", "M"
-    if v >= 0.001:
-        return f"{int(round(v * 1000))}", "K"
-    return "0", "K"
+    g = v / 1000.0
+    if g <= 999:
+        return f"{int(round(g))}", "G"
+    t = g / 1000.0
+    return f"{max(1, int(round(t)))}", "T"
+
+
+def _compact_uptime_str(raw: str) -> str:
+    """Normalize uptime token for SUM footer (same rules as metrics_server)."""
+    s = str(raw or "--").strip()
+    if not s or s == "--" or s == "WAN":
+        return s or "--"
+    # Already compact forms
+    if s.endswith("d") and "h" not in s and "m" not in s:
+        return s
+    days = hours = mins = 0
+    try:
+        if "d" in s:
+            dpart, rest = s.split("d", 1)
+            days = int(dpart or 0)
+            if rest.endswith("h"):
+                hours = int(rest[:-1] or 0)
+        elif "h" in s:
+            hpart, rest = s.split("h", 1)
+            hours = int(hpart or 0)
+            if rest.endswith("m"):
+                mins = int(rest[:-1] or 0)
+        elif s.endswith("m"):
+            mins = int(s[:-1] or 0)
+        else:
+            return s[:6]
+    except ValueError:
+        return s[:6]
+    if days > 9:
+        return f"{days}d"
+    if days > 0:
+        return f"{days}d{hours}h"
+    if hours > 9:
+        return f"0d{hours}h"
+    if hours > 0:
+        return f"{hours}h{mins:02d}m"
+    return f"{mins}m"
 
 
 def _rate_short(mbps: float) -> str:
@@ -1035,7 +1102,7 @@ def _draw_sum_footer(img, draw: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     time_s = now.strftime("%H:%M")
     date_s = now.strftime("%d/%m")
     online = bool(m.get("wan_online"))
-    mid = "WAN" if not online else str(m.get("uptime_str", "--") or "--")
+    mid = "WAN" if not online else _compact_uptime_str(str(m.get("uptime_str", "--") or "--"))
 
     time_ink = max(1, pf.text_ink_width(time_s, size="tiny"))
     date_ink = max(1, pf.text_ink_width(date_s, size="tiny"))
@@ -1231,12 +1298,11 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
     y += step
 
-    # 7–8) Hot Wifi + 2 tops  XOR  WAN 64-sample graph (alternate ~every 3s)
-    import time
-
+    # 7–8) Hot Wifi + 2 tops  XOR  WAN 64-sample graph
+    # Alternation is 2 SUM dwells clients → 2 SUM dwells graph (see advance_sum_alt_phase).
     block_y0 = y
     block_h = step * 3 - 1  # 17px — three tiny rows
-    show_wan_graph = (int(time.monotonic() / 3.0) % 2) == 1
+    show_wan_graph = sum_alt_show_wan_graph()
     if show_wan_graph:
         down_h = list(m.get("wan_history_down") or [])[-64:]
         up_h = list(m.get("wan_history_up") or [])[-64:]
