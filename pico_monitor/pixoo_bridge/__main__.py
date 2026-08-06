@@ -74,6 +74,11 @@ def _setup_logging(log_path: str | None) -> None:
     )
 
 
+_SNAPSHOT_HIST_MAX = 10
+_LAST_HIST_MONO = 0.0
+_LAST_HIST_SID = ""
+
+
 def _resolve_snapshot_path(explicit: str | None, log_path: str | None) -> Path | None:
     """PNG path for last pushed frame. Pixoo API cannot read the LED matrix back."""
     if explicit:
@@ -81,11 +86,33 @@ def _resolve_snapshot_path(explicit: str | None, log_path: str | None) -> Path |
     if log_path:
         # …/logs/pixoo_bridge.log → …/run/pixoo_last.png
         return Path(log_path).resolve().parent.parent / "run" / "pixoo_last.png"
-    return None
+    # Watchdog starts without --log (stdout→nohup); cwd is addon root.
+    return Path.cwd() / "run" / "pixoo_last.png"
 
 
-def _save_snapshot(frame, path: Path, *, screen_id: str = "") -> None:
-    """Atomically write 64×64 PNG (+ optional .txt with screen id)."""
+def _prune_snapshot_hist(hist_dir: Path, *, keep: int = _SNAPSHOT_HIST_MAX) -> None:
+    files = sorted(hist_dir.glob("*.png"), key=lambda p: p.name)
+    for old in files[:-keep]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+        try:
+            old.with_suffix(".txt").unlink()
+        except OSError:
+            pass
+
+
+def _save_snapshot(
+    frame,
+    path: Path,
+    *,
+    screen_id: str = "",
+    hist_max: int = _SNAPSHOT_HIST_MAX,
+    hist_every_s: float = 2.0,
+) -> None:
+    """Atomically write last 64×64 PNG + rolling hist/ (max `hist_max` frames)."""
+    global _LAST_HIST_MONO, _LAST_HIST_SID
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
@@ -93,6 +120,27 @@ def _save_snapshot(frame, path: Path, *, screen_id: str = "") -> None:
         tmp.replace(path)
         if screen_id:
             path.with_suffix(".txt").write_text(f"{screen_id}\n", encoding="utf-8")
+
+        # Rolling history: on screen change or every hist_every_s (≤ hist_max PNGs).
+        now = time.monotonic()
+        sid = str(screen_id or "UNK")
+        sid_changed = sid != _LAST_HIST_SID
+        due = (now - _LAST_HIST_MONO) >= max(0.5, float(hist_every_s))
+        if sid_changed or due or _LAST_HIST_MONO <= 0:
+            hist_dir = path.parent / "hist"
+            hist_dir.mkdir(parents=True, exist_ok=True)
+            safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in sid)[:16] or "UNK"
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            hist_png = hist_dir / f"{stamp}_{safe}.png"
+            n = 0
+            while hist_png.exists() and n < 99:
+                n += 1
+                hist_png = hist_dir / f"{stamp}_{safe}_{n}.png"
+            frame.save(hist_png, format="PNG")
+            hist_png.with_suffix(".txt").write_text(f"{sid}\n", encoding="utf-8")
+            _prune_snapshot_hist(hist_dir, keep=max(1, int(hist_max)))
+            _LAST_HIST_MONO = now
+            _LAST_HIST_SID = sid
     except OSError as exc:
         LOG.warning("snapshot save warn: %s", exc)
 

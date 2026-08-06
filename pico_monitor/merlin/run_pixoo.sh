@@ -41,7 +41,7 @@ PIXOO_IP="${PIXOO_IP:-192.168.52.4}"
 METRICS_PORT="${PICO_METRICS_PORT:-8088}"
 METRICS_URL="${PIXOO_METRICS_URL:-http://127.0.0.1:${METRICS_PORT}/metrics.json}"
 LOG="${ROOT}/logs/pixoo_bridge.log"
-mkdir -p "${ROOT}/logs"
+mkdir -p "${ROOT}/logs" "${ROOT}/run"
 
 exec "${PYTHON}" -m pixoo_bridge \
   --pixoo "${PIXOO_IP}" \
@@ -61,4 +61,5 @@ exec "${PYTHON}" -m pixoo_bridge \
   --wan-max-up "${PIXOO_WAN_MAX_UP_MBPS:-12}" \
   --screens "${PIXOO_SCREENS:-all}" \
   --log "${LOG}" \
+  --snapshot-path "${ROOT}/run/pixoo_last.png" \
   "$@"

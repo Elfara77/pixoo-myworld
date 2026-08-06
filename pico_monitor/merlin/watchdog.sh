@@ -187,6 +187,7 @@ start_bridge() {
     --wan-max-down "${WAN_MAX_DOWN}" \
     --wan-max-up "${WAN_MAX_UP}" \
     --screens "${SCREENS}" \
+    --snapshot-path "${RUN_DIR}/pixoo_last.png" \
     >> "${BRIDGE_LOG}" 2>&1 &
   echo $! > "${BRIDGE_PIDFILE}"
   log_bridge "started bridge pid=$(cat "${BRIDGE_PIDFILE}") pixoo=${PIXOO_IP} metrics=${METRICS_URL} color=${COLOR_MODE} blink=${ALERT_BLINK} rate=${RATE_STYLE} heavy=${HEAVY_DWELL}x${HEAVY_MULT} wlc_graph=${WLC_GRAPH} screens=${SCREENS}"

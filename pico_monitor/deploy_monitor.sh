@@ -1080,32 +1080,61 @@ pull_logs() {
   fi
 }
 
-# Pull last 64×64 frame the bridge pushed to Pixoo (PNG). Device API cannot read LEDs back.
+# Pull last 64×64 frame (+ up to 10 hist) the bridge pushed to Pixoo (PNG).
 pull_pixoo_snapshot() {
-  echo "==> snapshot Pixoo frame → ${LOCAL_SNAPS}/"
+  echo "==> snapshot Pixoo frame (+ hist ≤10) → ${LOCAL_SNAPS}/"
   mkdir -p "${LOCAL_SNAPS}"
-  local stamp dest remote_png remote_txt sid
+  local stamp dest dest_dir remote_png remote_txt remote_hist sid
   stamp="$(date '+%Y%m%d_%H%M%S')"
-  dest="${LOCAL_SNAPS}/pixoo_${stamp}.png"
+  dest_dir="${LOCAL_SNAPS}/${stamp}"
+  dest="${dest_dir}/pixoo_last.png"
   remote_png="${REMOTE_PATH}/run/pixoo_last.png"
   remote_txt="${REMOTE_PATH}/run/pixoo_last.txt"
+  remote_hist="${REMOTE_PATH}/run/hist"
 
-  if ! scp_base "$(TARGET):${remote_png}" "${dest}" 2>/dev/null; then
-    echo "warn: no snapshot on Merlin (${remote_png})" >&2
-    echo "  → start/restart the bridge, wait ~1s, retry. Pixoo cannot export its LED matrix." >&2
-    return 1
+  _try_scp_snap() {
+    mkdir -p "${dest_dir}"
+    scp_base "$(TARGET):${remote_png}" "${dest}" 2>/dev/null
+  }
+
+  if ! _try_scp_snap; then
+    echo "Snapshot absent on Merlin — upload bridge + reload, then retry…"
+    upload || true
+    reload_watchdog || start_watchdog || true
+    echo "Waiting 2s for first frame…"
+    sleep 2
+    if ! _try_scp_snap; then
+      echo "warn: still no ${remote_png}" >&2
+      echo "  Check: bridge running? Pillow OK? See ./deploy_monitor.sh logs" >&2
+      return 1
+    fi
   fi
-  ln -sfn "pixoo_${stamp}.png" "${LOCAL_SNAPS}/latest.png" 2>/dev/null || true
+
+  # Pull rolling history (best-effort; may be empty right after first start).
+  mkdir -p "${dest_dir}/hist"
+  scp_base -r "$(TARGET):${remote_hist}/." "${dest_dir}/hist/" 2>/dev/null || true
+  # Flatten empty scp quirks: remove empty hist dir if nothing landed
+  if [[ -d "${dest_dir}/hist" ]] && [[ -z "$(ls -A "${dest_dir}/hist" 2>/dev/null || true)" ]]; then
+    rmdir "${dest_dir}/hist" 2>/dev/null || true
+  fi
+
+  ln -sfn "${stamp}/pixoo_last.png" "${LOCAL_SNAPS}/latest.png" 2>/dev/null || true
+  ln -sfn "${stamp}" "${LOCAL_SNAPS}/latest" 2>/dev/null || true
   sid=""
-  if scp_base "$(TARGET):${remote_txt}" "${LOCAL_SNAPS}/pixoo_${stamp}.txt" 2>/dev/null; then
-    sid="$(tr -d '\r\n' < "${LOCAL_SNAPS}/pixoo_${stamp}.txt" 2>/dev/null || true)"
+  if scp_base "$(TARGET):${remote_txt}" "${dest_dir}/pixoo_last.txt" 2>/dev/null; then
+    sid="$(tr -d '\r\n' < "${dest_dir}/pixoo_last.txt" 2>/dev/null || true)"
   fi
-  echo "OK 64×64 PNG: ${dest}${sid:+  (screen=${sid})}"
+  local n_hist=0
+  n_hist="$(find "${dest_dir}/hist" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
+  echo "OK 64×64 PNG: ${dest}${sid:+  (screen=${sid})}  hist=${n_hist}/10"
   ls -la "${dest}"
+  if [[ -d "${dest_dir}/hist" ]]; then
+    ls -la "${dest_dir}/hist" 2>/dev/null || true
+  fi
   if command -v open >/dev/null 2>&1; then
-    open "${dest}" 2>/dev/null || true
+    open "${dest_dir}" 2>/dev/null || open "${dest}" 2>/dev/null || true
   elif command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "${dest}" 2>/dev/null || true
+    xdg-open "${dest_dir}" 2>/dev/null || xdg-open "${dest}" 2>/dev/null || true
   fi
 }
 
@@ -1307,7 +1336,7 @@ MENU_ITEMS=(
   "Autostart status (cru)|autostart"
   "Test /metrics.json (Merlin)|test_metrics"
   "Test Pixoo API|ping_pixoo"
-  "Snapshot Pixoo → PNG local|pull_pixoo_snapshot"
+  "Snapshot Pixoo → PNG (+hist≤10)|pull_pixoo_snapshot"
   "Tail logs (remote)|show_logs"
   "Récupérer logs → local|pull_logs"
   "Uninstall|uninstall_remote"
@@ -1324,7 +1353,7 @@ PILOT_MENU_ITEMS=(
   "Sélection écrans|configure_screens_and_apply"
   "État détaillé|pilot_status"
   "Test Pixoo API|ping_pixoo"
-  "Snapshot Pixoo → PNG local|pull_pixoo_snapshot"
+  "Snapshot Pixoo → PNG (+hist≤10)|pull_pixoo_snapshot"
   "Test metrics Merlin|test_metrics"
   "Récupérer logs|pull_logs"
   "Retour|back"
@@ -1675,7 +1704,7 @@ Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash|pilot|start|stop
   upload             Sync merlin/ + pixoo_bridge/
   test               GET /metrics.json
   logs               Pull router logs → pico_monitor/logs/
-  snapshot           Pull last 64×64 Pixoo frame → pico_monitor/logs/snapshots/*.png
+  snapshot           Pull last 64×64 Pixoo frame + hist≤10 → pico_monitor/logs/snapshots/
   flash              Pico OLED firmware sync (optional; not for Pixoo)
   pilot              Remote pilotage submenu (start/stop/cron/status/tests)
   start              Start/reload metrics + Pixoo bridge on Merlin
