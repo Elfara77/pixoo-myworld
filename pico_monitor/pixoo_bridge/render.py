@@ -846,132 +846,155 @@ def _greedy_clients(
 
 
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """Full-bleed summary: SYS/NET, metrics, LAN → WiFi → DWN/UP → Top → Hot."""
+    """Full-bleed summary: compact SYS/NET gauges, CPU/RAM, DSK/TMP, clients, DWN/UP, Hot/Top."""
     sys_hp = _system_health_score(m)
     net_sat = _network_saturation(m)
-    net_hp = int(round(max(0.0, min(100.0, 100.0 - net_sat))))
     sys_col = _sys_health_color(sys_hp)
     net_col = _net_sat_color(net_sat)
 
-    # Header: SYS / NET % aligned on same baseline (no WAN blob)
-    _txt(img, 1, 1, "SYS", LABEL, size="tiny", role="label")
-    _draw_val_unit(img, 16, 1, str(sys_hp), "%", sys_col, size="tiny", value_role="status")
-    _txt(img, 33, 1, "NET", LABEL, size="tiny", role="label")
-    _draw_val_unit(img, 48, 1, str(net_hp), "%", net_col, size="tiny", value_role="status")
-    # SYS gauge fills with health; NET gauge fills with saturation (inverted feel)
-    _gauge(d, 1, 9, 30, sys_hp, sys_col, alert=False)
-    _gauge(d, 33, 9, 30, net_sat, net_col, alert=False)
+    # Tiny glyph ≈5px; 1px gap between rows → step 6.
+    step = 6
+    y = 1
+
+    # 1) SYS [gauge] NET [gauge] — no % text
+    _txt(img, 1, y, "SYS", LABEL, size="tiny", role="label")
+    gx = 1 + pf.text_width("SYS", size="tiny") + 1
+    _gauge(d, gx, y, 16, sys_hp, sys_col, alert=False)
+    nx = gx + 16 + 2
+    _txt(img, nx, y, "NET", LABEL, size="tiny", role="label")
+    _gauge(d, nx + pf.text_width("NET", size="tiny") + 1, y, 16, net_sat, net_col, alert=False)
+    y += step
 
     cpu = float(m.get("cpu", 0) or 0)
     ram = float(m.get("ram", 0) or 0)
     tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
     disk = _disk_used_pct(m)
 
-    # Slightly tighter rows so Hot (greedy) fits under Top.
-    y = 15
-    row = 5
-    for label, val, kind, unit in (
-        ("CPU", cpu, "load", "%"),
-        ("RAM", ram, "load", "%"),
-        ("TMP", tmp, "temp_cpu", "°C"),
-        ("DSK", disk, "disk", "%"),
-    ):
-        col = _diagram_color(val, kind=kind)
-        alert = (
-            _is_crit_load(val)
-            if kind == "load"
-            else (
-                _is_crit_disk_tile(val)
-                if kind == "disk"
-                else _is_crit_temp_tile(int(val))
-            )
-        )
-        temp_hot = kind == "temp_cpu" and _is_crit_temp_tile(int(val))
-        blink_alert = alert and not temp_hot
-        if temp_hot:
-            _txt(img, 1, y, label, RED, size="tiny", role="status")
-        else:
-            _txt(img, 1, y, label, LABEL, size="tiny", role="label", alert=blink_alert)
-        _draw_val_unit(
-            img, 16, y, str(int(val)), unit, col, size="tiny", value_role="status", alert=blink_alert
-        )
-        bar_pct = val if kind != "temp_cpu" else min(100.0, (val / max(float(CRIT_TEMP_CPU), 1.0)) * 100.0)
-        _gauge(d, 36, y + 1, 27, bar_pct, col, alert=blink_alert)
-        y += row
+    # 2) CPU [gauge] RAM [gauge] — labels + gauges only
+    cpu_col = _diagram_color(cpu, kind="load")
+    ram_col = _diagram_color(ram, kind="load")
+    cpu_alert = _is_crit_load(cpu)
+    ram_alert = _is_crit_load(ram)
+    _txt(img, 1, y, "CPU", LABEL, size="tiny", role="label", alert=cpu_alert)
+    _gauge(d, 1 + pf.text_width("CPU", size="tiny") + 1, y, 16, cpu, cpu_col, alert=cpu_alert)
+    rx = 34
+    _txt(img, rx, y, "RAM", LABEL, size="tiny", role="label", alert=ram_alert)
+    _gauge(d, rx + pf.text_width("RAM", size="tiny") + 1, y, 16, ram, ram_col, alert=ram_alert)
+    y += step
 
-    foot = 5
+    # 3) DSK % …… TMP °C — values only, no gauges
+    dsk_col = _diagram_color(disk, kind="disk")
+    tmp_i = int(tmp)
+    tmp_hot = _is_crit_temp_tile(tmp_i)
+    tmp_col = RED if tmp_hot else _temp_tile_color(tmp_i)
+    _txt(img, 1, y, "DSK", LABEL, size="tiny", role="label", alert=_is_crit_disk_tile(disk))
+    _draw_val_unit(
+        img,
+        1 + pf.text_width("DSK", size="tiny") + 2,
+        y,
+        str(int(disk)),
+        "%",
+        dsk_col,
+        size="tiny",
+        value_role="status",
+        alert=_is_crit_disk_tile(disk),
+    )
+    _txt(
+        img,
+        34,
+        y,
+        "TMP",
+        RED if tmp_hot else LABEL,
+        size="tiny",
+        role="status" if tmp_hot else "label",
+    )
+    _draw_val_unit(
+        img,
+        34 + pf.text_width("TMP", size="tiny") + 2,
+        y,
+        str(tmp_i),
+        "°C",
+        tmp_col,
+        size="tiny",
+        value_role="status",
+    )
+    y += step
 
-    # 1) LAN1234 …… USB23
+    # 4) 15/17 LAN1234 VPN123 — wifi & total green, "/" cyan; compact if needed
+    clients = int(m.get("clients", 0) or 0)
+    wifi = int(m.get("clients_wifi", 0) or 0)
     ports = list(m.get("lan_ports") or [False, False, False, False])[:4]
     while len(ports) < 4:
         ports.append(False)
-    _txt(img, 1, y, "LAN", LABEL, size="tiny", role="label")
-    x = 1 + pf.text_width("LAN", size="tiny")
-    for i, up in enumerate(ports, start=1):
-        _txt(img, x, y, str(i), GREEN if up else RED, size="tiny", role="status")
-        x += pf.text_width(str(i), size="tiny")
-    usb2 = m.get("usb2") or {}
-    usb3 = m.get("usb3") or {}
-    usb = m.get("usb") or {}
-    u2 = bool(usb2.get("present") or usb.get("present"))
-    u3 = bool(usb3.get("present"))
-    usb_blk = "USB"
-    d2, d3 = "2", "3"
-    usb_w = (
-        pf.text_width(usb_blk, size="tiny")
-        + pf.text_width(d2, size="tiny")
-        + pf.text_width(d3, size="tiny")
-    )
-    ux = 63 - usb_w + 1
-    ux = _txt(img, ux, y, usb_blk, LABEL, size="tiny", role="label")
-    ux = _txt(img, ux, y, d2, GREEN if u2 else RED, size="tiny", role="status")
-    _txt(img, ux, y, d3, GREEN if u3 else RED, size="tiny", role="status")
-    y += foot
+    slots = _vpn_slots(m)[:3]
 
-    # 2) WiFi wifi/total …… VPN123
-    clients = int(m.get("clients", 0) or 0)
-    wifi = int(m.get("clients_wifi", 0) or 0)
-    _txt(img, 1, y, "WiFi", LABEL, size="tiny", role="label")
-    ratio = f"{wifi}/{clients}"
-    _txt(
-        img,
-        1 + pf.text_width("WiFi", size="tiny") + 2,
-        y,
-        ratio,
-        GREEN if clients > 0 else DIM,
-        size="tiny",
-        role="status",
-    )
-    slots = _vpn_slots(m)
-    vpn_w = pf.text_width("VPN", size="tiny") + 3 * pf.text_width("0", size="tiny")
-    vx = 63 - vpn_w + 1
-    vx = _txt(img, vx, y, "VPN", LABEL, size="tiny", role="label")
-    for i, (_name, on, _typ) in enumerate(slots[:3], start=1):
-        vx = _txt(img, vx, y, str(i), GREEN if on else RED, size="tiny", role="status")
-    y += foot
+    def _draw_clients_row(*, lan_lab: str, vpn_lab: str) -> int:
+        cx = 1
+        cx = _txt(img, cx, y, str(wifi), GREEN, size="tiny", role="status")
+        cx = _txt(img, cx, y, "/", HEADER, size="tiny", role="status")
+        cx = _txt(img, cx, y, str(clients), GREEN, size="tiny", role="status")
+        cx += 1
+        cx = _txt(img, cx, y, lan_lab, LABEL, size="tiny", role="label")
+        for i, up in enumerate(ports, start=1):
+            cx = _txt(img, cx, y, str(i), GREEN if up else RED, size="tiny", role="status")
+        cx += 1
+        cx = _txt(img, cx, y, vpn_lab, LABEL, size="tiny", role="label")
+        for i, (_name, on, _typ) in enumerate(slots, start=1):
+            cx = _txt(img, cx, y, str(i), GREEN if on else RED, size="tiny", role="status")
+        return cx
 
-    # 3) DWN rate …… UP rate — colors vs WAN max caps
+    # Full LAN/VPN labels when they fit (64px); else L/V.
+    need = (
+        pf.text_width(f"{wifi}/{clients}", size="tiny")
+        + 1
+        + pf.text_width("LAN", size="tiny")
+        + 4 * pf.text_width("0", size="tiny")
+        + 1
+        + pf.text_width("VPN", size="tiny")
+        + 3 * pf.text_width("0", size="tiny")
+    )
+    if need <= 63:
+        _draw_clients_row(lan_lab="LAN", vpn_lab="VPN")
+    else:
+        _draw_clients_row(lan_lab="L", vpn_lab="V")
+    y += step
+
+    # 5) DWN … | UP … — UP locked: label + reserved "100K" slot, rate right-justified
     down = float(m.get("wan_down", 0) or 0)
     up = float(m.get("wan_up", 0) or 0)
     down_col = _wan_link_color(down, _WAN_MAX_DOWN_MBPS)
     up_col = _wan_link_color(up, _WAN_MAX_UP_MBPS)
     _txt(img, 1, y, "DWN", LABEL, size="tiny", role="label")
-    _draw_rate(
-        img, 1 + pf.text_width("DWN", size="tiny") + 2, y, down, color=down_col
-    )
+    _draw_rate(img, 1 + pf.text_width("DWN", size="tiny") + 2, y, down, color=down_col)
+    up_rate_slot = pf.text_width("100K", size="tiny")
     up_lab_w = pf.text_width("UP", size="tiny")
-    rate_w = _rate_pixel_width(up)
-    up_x = max(0, 63 - (up_lab_w + 2 + rate_w) + 1)
-    _txt(img, up_x, y, "UP", LABEL, size="tiny", role="label")
-    _draw_rate(img, up_x + up_lab_w + 2, y, up, color=up_col)
-    y += foot
+    up_lab_x = 63 - (up_lab_w + 2 + up_rate_slot) + 1
+    _txt(img, up_lab_x, y, "UP", LABEL, size="tiny", role="label")
+    _draw_rate_right(img, 63, y, up, color=up_col)
+    y += step
 
-    # 4) Top hostname …… rate (right-justified); ranked vs WAN max down/up
+    # 6) Hot N (fixed 3+1+1 chars) then Top hostname [rate]
+    # Reserved: "Hot" + space + one digit → Top always at same x.
+    hot_slot_w = pf.text_width("Hot", size="tiny") + 4 + pf.text_width("0", size="tiny")
+    top_x = 1 + hot_slot_w + 2
+    n_hot, _hot = _greedy_clients(m, limit=3)
+    n_show = min(9, int(n_hot))
+    hot_col = DIM if n_show == 0 else (YELLOW if n_show < 3 else RED)
+    _txt(img, 1, y, "Hot", LABEL, size="tiny", role="label")
+    _txt(
+        img,
+        1 + pf.text_width("Hot", size="tiny") + 4,
+        y,
+        str(n_show),
+        hot_col,
+        size="tiny",
+        role="status",
+    )
+    _txt(img, top_x, y, "Top", LABEL, size="tiny", role="label")
     top = _pick_top_by_wan_util(m)
-    _txt(img, 1, y, "Top", LABEL, size="tiny", role="label")
+    name_x = top_x + pf.text_width("Top", size="tiny") + 2
     if top:
         name, rate = top
-        # Color rate with the direction's WAN cap (pick matching max).
         ranked0 = _rank_clients_by_wan_util(m)
         top_col = FG
         if ranked0 and ranked0[0][0] == name:
@@ -981,35 +1004,13 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             else:
                 top_col = _wan_link_color(rate, _WAN_MAX_UP_MBPS)
         rate_w = _rate_pixel_width(rate)
-        name_x = 1 + pf.text_width("Top", size="tiny") + 2
         max_name_w = max(0, 63 - rate_w - 2 - name_x + 1)
         shown = _truncate_to_width(str(name), max_name_w)
         _txt(img, name_x, y, shown, FG, size="tiny", role="value")
         _draw_rate_right(img, 63, y, rate, color=top_col)
     else:
         uptime = str(m.get("uptime_str", "--"))[:8]
-        _txt(img, 1 + pf.text_width("Top", size="tiny") + 2, y, uptime, FG, size="tiny", role="value")
-    y += foot
-
-    # 5) Hot N + top-3 greedy hostnames (util ≥ 40% of WAN max down and/or up)
-    n_hot, hot = _greedy_clients(m, limit=3)
-    _txt(img, 1, y, "Hot", LABEL, size="tiny", role="label")
-    hot_col = DIM if n_hot == 0 else (YELLOW if n_hot < 3 else RED)
-    hx = _txt(
-        img,
-        1 + pf.text_width("Hot", size="tiny") + 2,
-        y,
-        str(n_hot),
-        hot_col,
-        size="tiny",
-        role="status",
-    )
-    if hot:
-        names = ",".join(n for n, _d, _u, _util in hot)
-        max_w = max(0, 63 - hx - 2)
-        shown = _truncate_to_width(names, max_w)
-        if shown:
-            _txt(img, hx + 2, y, shown, FG, size="tiny", role="value")
+        _txt(img, name_x, y, uptime, FG, size="tiny", role="value")
 
 
 def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
@@ -1021,7 +1022,7 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
     if sid == "SUM":
         _render_sum(img, d, m)
         if m.get("_offline"):
-            _txt(img, 50, 10, "OFF", YELLOW, size="tiny", role="value", alert=True)
+            _txt(img, 56, 1, "OFF", YELLOW, size="tiny", role="value", alert=True)
         return img
 
     _header(img, d, SCREEN_TITLES.get(sid, sid), idx)
