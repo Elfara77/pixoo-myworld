@@ -299,13 +299,13 @@ def _temp_avg(m: dict[str, Any]) -> int:
 
 
 def _temp_tile_color(celsius: float) -> tuple[int, int, int]:
-    """Temps screen: green <55, yellow 55–60, red >60."""
+    """Temp value color: green <70°C, yellow 70–80°C, red >80°C."""
     t = float(celsius or 0)
     if t <= 0:
         return DIM
-    if t > 60:
+    if t > 80:
         return RED
-    if t >= 55:
+    if t >= 70:
         return YELLOW
     return GREEN
 
@@ -350,7 +350,7 @@ def _is_crit_disk(pct: float) -> bool:
 
 
 def _is_crit_temp_tile(val: int) -> bool:
-    return int(val) > 60
+    return int(val) > 80
 
 
 def _is_crit_disk_tile(pct: float) -> bool:
@@ -999,9 +999,9 @@ def _trend_from_history(
 
 
 def _trend_color(mark: str) -> tuple[int, int, int]:
-    """↑ red (rise), ↓ green (fall), = gray (stable)."""
+    """↑ orange (rise), ↓ green (fall), = gray (stable)."""
     if mark == "↑":
-        return RED
+        return ORANGE
     if mark == "↓":
         return GREEN
     if mark == "=":
