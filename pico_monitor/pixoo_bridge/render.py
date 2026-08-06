@@ -1231,49 +1231,87 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
     y += step
 
-    # 7) WAN down/up history (64 samples, 1px each) — replaces Hot Wifi
-    down_h = list(m.get("wan_history_down") or [])[-64:]
-    up_h = list(m.get("wan_history_up") or [])[-64:]
-    # Use two rows (12px) so the dual graph is readable above top clients.
-    gh = 11
-    _graph_up_down(
-        img,
-        d,
-        x0,
-        y,
-        64,
-        gh,
-        down_h,
-        up_h,
-        GRAPH_DOWN,
-        GRAPH_UP,
-        fill_down=True,
-    )
-    y += gh + 1  # 12px block + 1px gap before tops
+    # 7–8) Hot Wifi + 2 tops  XOR  WAN 64-sample graph (alternate ~every 3s)
+    import time
 
-    tops = _rank_clients_by_wan_util(m)[:2]
-    tag_cols = {"D": GRAPH_DOWN, "U": ORANGE, "B": RED}
-    footer_y0 = 64 - 7
-    for i in range(2):
-        if y + 4 >= footer_y0:
-            break
-        if i >= len(tops):
-            _txt(img, x0, y, "-", DIM, size="tiny", role="status")
-            y += step
-            continue
-        name, cd, cu, _util = tops[i]
-        tag = _client_dir_tag(cd, cu)
-        rate, cap = _client_dir_rate(cd, cu, tag)
-        host_col = _top_hostname_color(cd, cu)
-        rate_col = _wan_link_color(rate, cap)
-        _txt(img, x0, y, tag, tag_cols.get(tag, FG), size="tiny", role="status")
-        rate_w = _rate_ink_width(rate)
-        name_x = x0 + pf.text_width(tag, size="tiny") + 2
-        max_name_w = max(0, x1 - rate_w - 2 - name_x + 1)
-        shown = _truncate_to_width(str(name), max_name_w)
-        _txt(img, name_x, y, shown, host_col, size="tiny", role="status")
-        _draw_rate_right(img, x1, y, rate, color=rate_col)
+    block_y0 = y
+    block_h = step * 3 - 1  # 17px — three tiny rows
+    show_wan_graph = (int(time.monotonic() / 3.0) % 2) == 1
+    if show_wan_graph:
+        down_h = list(m.get("wan_history_down") or [])[-64:]
+        up_h = list(m.get("wan_history_up") or [])[-64:]
+        _graph_up_down(
+            img,
+            d,
+            x0,
+            block_y0,
+            64,
+            block_h,
+            down_h,
+            up_h,
+            GRAPH_DOWN,
+            GRAPH_UP,
+            fill_down=True,
+        )
+        # Tiny legend corners
+        _txt(img, x0, block_y0, "DN", GRAPH_DOWN, size="tiny", role="status")
+        _txt(img, x1 - pf.text_ink_width("UP", size="tiny") + 1, block_y0, "UP", GRAPH_UP, size="tiny", role="status")
+        y = block_y0 + step * 3
+    else:
+        # Hot Wifi n …… down_rate up_rate (hottest Wi‑Fi STA)
+        n_hot, hot = _greedy_clients(m, limit=3)
+        n_show = min(9, int(n_hot))
+        hot_col = DIM if n_show == 0 else FG
+        hot_lab = "Hot Wifi"
+        _txt(img, x0, y, hot_lab, LABEL, size="tiny", role="label")
+        _txt(
+            img,
+            x0 + pf.text_width(hot_lab, size="tiny") + 2,
+            y,
+            str(n_show),
+            hot_col,
+            size="tiny",
+            role="status",
+        )
+        if hot:
+            _hn, hd, hu, _hutil = hot[0]
+            up_w = _rate_ink_width(hu)
+            _draw_rate_right(img, x1, y, hu, color=_wan_link_color(hu, _WAN_MAX_UP_MBPS))
+            _draw_rate_right(
+                img,
+                x1 - up_w - 2,
+                y,
+                hd,
+                color=_wan_link_color(hd, _WAN_MAX_DOWN_MBPS),
+            )
+        else:
+            _txt(img, _right_x("--"), y, "--", DIM, size="tiny", role="status")
         y += step
+
+        # Two top-client rows (hostname + rate)
+        tops = _rank_clients_by_wan_util(m)[:2]
+        tag_cols = {"D": GRAPH_DOWN, "U": ORANGE, "B": RED}
+        footer_y0 = 64 - 7
+        for i in range(2):
+            if y + 4 >= footer_y0:
+                break
+            if i >= len(tops):
+                _txt(img, x0, y, "-", DIM, size="tiny", role="status")
+                y += step
+                continue
+            name, cd, cu, _util = tops[i]
+            tag = _client_dir_tag(cd, cu)
+            rate, cap = _client_dir_rate(cd, cu, tag)
+            host_col = _top_hostname_color(cd, cu)
+            rate_col = _wan_link_color(rate, cap)
+            _txt(img, x0, y, tag, tag_cols.get(tag, FG), size="tiny", role="status")
+            rate_w = _rate_ink_width(rate)
+            name_x = x0 + pf.text_width(tag, size="tiny") + 2
+            max_name_w = max(0, x1 - rate_w - 2 - name_x + 1)
+            shown = _truncate_to_width(str(name), max_name_w)
+            _txt(img, name_x, y, shown, host_col, size="tiny", role="status")
+            _draw_rate_right(img, x1, y, rate, color=rate_col)
+            y += step
 
     # 9) Footer pinned to bottom: continuous 7px inverted band
     _draw_sum_footer(img, d, m)
