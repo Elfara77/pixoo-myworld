@@ -20,13 +20,17 @@ DIM = (100, 108, 122)
 LABEL = (110, 118, 132)
 UNIT = (95, 105, 120)
 CYAN = (40, 210, 230)
-ORANGE = (255, 140, 50)
+ORANGE = (255, 140, 50)  # rising trend ↑ only (not WiFi)
 GREEN = (40, 220, 110)
 YELLOW = (240, 200, 50)
 RED = (255, 70, 70)
 BAR_BG = (22, 26, 38)
 GRAPH_DOWN = (40, 190, 255)
-GRAPH_UP = (255, 130, 60)
+GRAPH_UP = (255, 130, 60)  # WAN/client Up rates (orange family)
+# WiFi chrome (badges, balance share, WiFi graphs) — lime.
+WIFI = (220, 227, 22)
+# LAN/Eth chrome (badges, balance share, Eth graphs) — violet; status digits stay GREEN/RED.
+LAN = (185, 75, 255)
 HEADER = (40, 210, 230)
 HEADER_FG = (6, 8, 14)
 TEXT_MONO = (255, 255, 255)
@@ -92,9 +96,9 @@ _NET_SAT_SMOOTH: float | None = None
 _SYS_HP_HIST: list[float] = []
 _NET_SAT_HIST: list[float] = []
 # SUM dwell D split into 8 equal slots (Σ=D), half/half:
-# Clients (0–3): Hot + 2 tops + Wi/LAN + VPN/5G/USB + SYS/NET + CPU/RAM + DSK/TMP
-# Graph  (4–7): 3-row WAN graph (lines 2–4) + DOWN/UP WiFi|Wired bars (lines 5–6)
-# Always: line1 DWN/UP; lines 7–9 SYS/NET + CPU/RAM + DSK/TMP; footer.
+# Always: line1 DWN/UP (graph title); line5 Wi/LAN (balance title); lines 8–9 CPU/RAM + SYS/NET; footer.
+# Swap A (lines 2–4): 3-row WAN graph  ↔  Hot + 2 tops
+# Swap B (lines 6–7): DOWN/UP WiFi|Wired balances  ↔  VPN/5G/USB + DSK/TMP
 _SUM_DWELL_T0 = 0.0
 _SUM_DWELL_D = 1.0
 # Latched once per frame in set_sum_dwell — never recompute mid-render.
@@ -357,11 +361,11 @@ def _split_rate(mbps: float) -> tuple[str, str]:
 
 
 def _compact_uptime_str(raw: str) -> str:
-    """Normalize uptime token for SUM footer (same rules as metrics_server)."""
+    """SUM footer uptime: ``8h18``, ``1.5d`` (days + hours/24 to 1 decimal)."""
     s = str(raw or "--").strip()
     if not s or s == "--" or s == "WAN":
         return s or "--"
-    # Already compact forms
+    # Already decimal-days (e.g. ``1.5d``) or plain ``12d``
     if s.endswith("d") and "h" not in s and "m" not in s:
         return s
     days = hours = mins = 0
@@ -371,6 +375,9 @@ def _compact_uptime_str(raw: str) -> str:
             days = int(dpart or 0)
             if rest.endswith("h"):
                 hours = int(rest[:-1] or 0)
+            elif rest:
+                # ``1.5d`` already handled above; tolerate junk
+                return s[:6]
         elif "h" in s:
             hpart, rest = s.split("h", 1)
             hours = int(hpart or 0)
@@ -382,14 +389,20 @@ def _compact_uptime_str(raw: str) -> str:
             return s[:6]
     except ValueError:
         return s[:6]
-    if days > 9:
-        return f"{days}d"
-    if days > 0:
-        return f"{days}d{hours}h"
-    if hours > 9:
-        return f"0d{hours}h"
+
+    # ≥1 day, or ≥10h (legacy ``0dNNh``): always ``X.Yd`` (Y = hours/24, 1 decimal, half-up)
+    if days > 0 or hours >= 10:
+        if hours >= 10 and days == 0:
+            # ``0d18h`` / bare 18h → fraction of a day only
+            total_h = hours
+            days_f = total_h / 24.0
+        else:
+            days_f = float(days) + hours / 24.0
+        tenths = int(days_f * 10.0 + 0.5)
+        return f"{tenths // 10}.{tenths % 10}d"
     if hours > 0:
-        return f"{hours}h{mins:02d}m"
+        # ``8h18m`` → ``8h18`` (drop the m)
+        return f"{hours}h{mins:02d}"
     return f"{mins}m"
 
 
@@ -739,7 +752,7 @@ def _wifi_wired_split_bar(
     *,
     h: int = 5,
 ) -> None:
-    """Full solid bar: WiFi orange (left) + Wired green (right) by rate ratio."""
+    """Full solid bar: WiFi lime (left) + Wired violet (right) by rate ratio."""
     if w <= 0 or h <= 0:
         return
     wifi = max(0.0, float(wifi_mbps or 0))
@@ -755,13 +768,13 @@ def _wifi_wired_split_bar(
     wifi_w = int(w * (wifi / total))
     wifi_w = max(0, min(w, wifi_w))
     if wifi_w >= w:
-        draw.rectangle([x, y, x1, y1], fill=ORANGE)
+        draw.rectangle([x, y, x1, y1], fill=WIFI)
         return
     if wifi_w <= 0:
-        draw.rectangle([x, y, x1, y1], fill=GREEN)
+        draw.rectangle([x, y, x1, y1], fill=LAN)
         return
-    draw.rectangle([x, y, x + wifi_w - 1, y1], fill=ORANGE)
-    draw.rectangle([x + wifi_w, y, x1, y1], fill=GREEN)
+    draw.rectangle([x, y, x + wifi_w - 1, y1], fill=WIFI)
+    draw.rectangle([x + wifi_w, y, x1, y1], fill=LAN)
 
 
 def _draw_sum_down_up_split_gauges(
@@ -775,10 +788,9 @@ def _draw_sum_down_up_split_gauges(
     step: int,
 ) -> int:
     """Two full-width DOWN/UP WiFi|Wired bars; returns y after both rows."""
-    # Align both gauges to the wider "DOWN" label.
+    # Align gauge left edge with SYS/CPU frames (lab_w_SYS + trend_w = 16).
     lab_w = pf.text_width("DOWN", size="tiny")
-    gap = 1
-    gx = x0 + lab_w + gap
+    gx = x0 + lab_w  # was +1 gap; start 1px earlier to match SYS/CPU
     gw = max(4, x1 - gx + 1)
     bar_h = 5
 
@@ -1241,14 +1253,42 @@ def _draw_sum_hot_row(img, m: dict[str, Any], *, x0: int, x1: int, y: int) -> No
     shown = _fit_hot_label(raw, x1 - x0 + 1)
     idle = shown.rstrip().endswith("--") or shown.strip() == "Hot"
     col = DIM if idle else FG
-    # "Hot" always in graph-down blue; remainder keeps status color.
-    if shown.startswith("Hot"):
-        x = _txt(img, x0, y, "Hot", GRAPH_DOWN, size="tiny", role="label")
-        rest = shown[3:]
-        if rest:
-            _txt(img, x, y, rest, col, size="tiny", role="status")
-    else:
+    # "Hot" blue; "WiFi" violet; "LAN" teal; remainder status color.
+    if not shown.startswith("Hot"):
         _txt(img, x0, y, shown, col, size="tiny", role="status")
+        return
+    x = _txt(img, x0, y, "Hot", GRAPH_DOWN, size="tiny", role="label")
+    rest = shown[3:]
+
+    def _emit(token: str, color) -> None:
+        nonlocal x, rest
+        x = _txt(img, x, y, token, color, size="tiny", role="label")
+        rest = rest[len(token) :]
+
+    while rest:
+        if rest.startswith(" WiFi"):
+            _emit(" WiFi", WIFI)
+        elif rest.startswith("WiFi"):
+            _emit("WiFi", WIFI)
+        elif rest.startswith(" + LAN"):
+            x = _txt(img, x, y, " +", col, size="tiny", role="status")
+            rest = rest[2:]
+            _emit(" LAN", LAN)
+        elif rest.startswith(" LAN"):
+            _emit(" LAN", LAN)
+        elif rest.startswith("LAN"):
+            _emit("LAN", LAN)
+        else:
+            # Chunk until next WiFi/LAN token.
+            cuts = [j for j in (rest.find(" WiFi"), rest.find(" + LAN"), rest.find(" LAN")) if j > 0]
+            # also bare WiFi/LAN mid-string
+            for marker in ("WiFi", "LAN"):
+                j = rest.find(marker)
+                if j > 0:
+                    cuts.append(j)
+            cut = min(cuts) if cuts else len(rest)
+            x = _txt(img, x, y, rest[:cut], col, size="tiny", role="status")
+            rest = rest[cut:]
 
 
 def _draw_sum_top_client_line(
@@ -1272,7 +1312,9 @@ def _draw_sum_top_client_line(
     # Hard reserve on the right so rate+tag cannot collide into the name column.
     max_name_w = max(0, x1 - trail_w - 2 - x0 + 1)
     shown = _truncate_to_width(host, max_name_w)
-    _txt(img, x0, y, shown, FG if rate > 0 else DIM, size="tiny", role="status")
+    idle = rate <= 0 or _rate_is_negligible(rate)
+    rate_col = DIM if idle else tag_col
+    _txt(img, x0, y, shown, rate_col, size="tiny", role="status")
     name_end = x0 + pf.text_width(shown, size="tiny")
     _draw_rate_dir_tag_right(
         img,
@@ -1280,8 +1322,8 @@ def _draw_sum_top_client_line(
         y,
         rate,
         tag,
-        tag_col,
-        rate_color=FG if rate > 0 else DIM,
+        tag_col if not idle else DIM,
+        rate_color=rate_col,
         min_x=name_end + 1,
     )
 
@@ -1299,7 +1341,7 @@ def _draw_sum_top_clients_rows(
     """Two lines only: #1 top_down + D, then #1 top_up + U (tag after rate unit)."""
     for entry, tag, tag_col in (
         (_first_top(m.get("top_down")), "D", GRAPH_DOWN),
-        (_first_top(m.get("top_up")), "U", ORANGE),
+        (_first_top(m.get("top_up")), "U", GRAPH_UP),
     ):
         if y + 4 >= footer_y0:
             break
@@ -1662,11 +1704,17 @@ def _draw_sum_footer(img, draw: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     if mid_x1 >= mid_x0:
         draw.rectangle([mid_x0, band_y0, mid_x1, 63], fill=mid_col, outline=mid_col)
 
-    # Mid text: 1px into the mid accent (glyph bordered by accent on all sides).
-    mid_text_x = mid_x0 + 1
-    avail = max(0, (date_x - 1) - mid_text_x)
-    while mid and pf.text_width(mid, size="tiny") > avail:
+    # Mid text centered in the accent span (1px inset from band edges when possible).
+    mid_ink = max(1, pf.text_ink_width(mid, size="tiny")) if mid else 0
+    avail = max(0, (mid_x1 - mid_x0 + 1) - 2)  # keep ≥1px accent pad L/R
+    while mid and pf.text_ink_width(mid, size="tiny") > avail:
         mid = mid[:-1]
+        mid_ink = max(1, pf.text_ink_width(mid, size="tiny")) if mid else 0
+    mid_text_x = mid_x0 + 1
+    if mid and mid_x1 >= mid_x0:
+        band_inner = mid_x1 - mid_x0 - 1  # columns mid_x0+1 … mid_x1-1
+        if band_inner >= mid_ink:
+            mid_text_x = mid_x0 + 1 + max(0, (band_inner - mid_ink) // 2)
 
     black = (0, 0, 0)
     pf.draw_tiny(img, time_x, text_y, time_s, black)
@@ -1710,8 +1758,8 @@ def _draw_sum_vpn_usb_row(
     mx = max(x0, (x0 + x1 - mid_w + 1) // 2)
     # Keep clear of VPN ink on the left when possible.
     mx = max(mx, x + 2)
-    mx = _draw_sum_inv_lab(img, draw, mx, y, "5G", ORANGE)
-    _txt(img, mx + 1, y, cnt, DIM if n5 == 0 else FG, size="tiny", role="status")
+    mx = _draw_sum_inv_lab(img, draw, mx, y, "5G", WIFI)
+    _txt(img, mx + 1, y, cnt, DIM if n5 == 0 else WIFI, size="tiny", role="status")
 
 
 def _draw_sum_down_up_legend_row(
@@ -1759,29 +1807,94 @@ def _draw_sum_wi_lan_row(
     x1: int,
     y: int,
 ) -> None:
-    """Wi wifi/total …… LAN1234 — Wi on orange, LAN on green (black text)."""
+    """Wi wifi/total …… LAN1234 — Wi lime, LAN violet; port digits green/red."""
     clients = int(m.get("clients", 0) or 0)
     wifi = int(m.get("clients_wifi", 0) or 0)
     ports = list(m.get("lan_ports") or [False, False, False, False])[:4]
     while len(ports) < 4:
         ports.append(False)
 
-    x = _draw_sum_inv_lab(img, draw, x0, y, "Wi", ORANGE)
+    x = _draw_sum_inv_lab(img, draw, x0, y, "Wi", WIFI)
     x += 1
-    x = _txt(img, x, y, str(wifi), DIM if wifi == 0 else FG, size="tiny", role="status")
-    x = _txt(img, x, y, "/", HEADER, size="tiny", role="status")
-    _txt(img, x, y, str(clients), DIM if clients == 0 else FG, size="tiny", role="status")
+    x = _txt(img, x, y, str(wifi), DIM if wifi == 0 else WIFI, size="tiny", role="status")
+    x = _txt(img, x, y, "/", WIFI, size="tiny", role="status")
+    _txt(img, x, y, str(clients), DIM if clients == 0 else WIFI, size="tiny", role="status")
 
     lan_bw = max(1, pf.text_ink_width("LAN", size="tiny")) + 2
     dig_span = pf.text_width("123", size="tiny") + pf.text_ink_width("4", size="tiny")
     lx = x1 - (lan_bw + dig_span) + 1
-    lx = _draw_sum_inv_lab(img, draw, lx, y, "LAN", GREEN)
+    lx = _draw_sum_inv_lab(img, draw, lx, y, "LAN", LAN)
     for i, up in enumerate(ports, start=1):
         lx = _txt(img, lx, y, str(i), GREEN if up else RED, size="tiny", role="status")
 
 
+def _draw_sum_dsk_tmp_row(
+    img,
+    m: dict[str, Any],
+    *,
+    y: int,
+    lab_l: int,
+    lab_r: int,
+    lab_w: int,
+    trend_w: int,
+    x1: int,
+) -> None:
+    """DSK nn% …… TMP[↑] nn°C — TMP tries to align with RAM column; °C flush-right."""
+    disk = _disk_used_pct(m)
+    tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
+    dsk_col = _diagram_color(disk, kind="disk")
+    tmp_i = int(round(tmp))
+    tmp_hot = _is_crit_temp_tile(tmp_i)
+    tmp_col = RED if tmp_hot else _temp_tile_color(tmp_i)
+    _txt(img, lab_l, y, "DSK", LABEL, size="tiny", role="label", alert=_is_crit_disk_tile(disk))
+    _draw_val_unit(
+        img,
+        lab_l + lab_w + 5,
+        y,
+        str(int(round(disk))),
+        "%",
+        dsk_col,
+        size="tiny",
+        value_role="status",
+        alert=_is_crit_disk_tile(disk),
+    )
+    tr_tmp = _trend_from_history(m.get("temp_history"), eps_abs=0.5, eps_ratio=0.01)
+    tmp_num = str(tmp_i)
+    tmp_unit_gap = 0
+    vu_w = (
+        pf.text_width(tmp_num, size="tiny")
+        + tmp_unit_gap
+        + pf.text_ink_width("°C", size="tiny")
+    )
+    tr_slot = trend_w if tr_tmp else 0
+    need = lab_w + tr_slot + vu_w
+    tmp_lab_x = lab_r if (lab_r + need - 1) <= x1 else max(0, x1 - need + 1)
+    bx = _txt(
+        img,
+        tmp_lab_x,
+        y,
+        "TMP",
+        RED if tmp_hot else LABEL,
+        size="tiny",
+        role="status" if tmp_hot else "label",
+    )
+    if tr_tmp:
+        bx = _draw_trend(img, bx, y, tr_tmp)
+    _draw_val_unit_right(
+        img,
+        x1,
+        y,
+        tmp_num,
+        "°C",
+        tmp_col,
+        size="tiny",
+        value_role="status",
+        unit_gap=tmp_unit_gap,
+    )
+
+
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """SUM layout (9 content rows + footer), graph half swaps lines 2–4 and 5–6."""
+    """SUM layout: permanent DWN/UP + Wi/LAN; swap graph↔Hot/tops and balances↔VPN+DSK."""
     sys_hp = _system_health_score(m)
     net_sat = _network_saturation(m)
     sys_col = _sys_health_color(sys_hp)
@@ -1803,9 +1916,6 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     footer_y0 = 64 - 7
     y = 0
 
-    def _right_x(text: str) -> int:
-        return x1 - pf.text_ink_width(text, size="tiny") + 1
-
     def _label_trend_gauge(
         lab_x: int,
         lab: str,
@@ -1822,11 +1932,11 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             _draw_trend(img, lab_x + lab_w, y, mark)
         _gauge(d, g_x0, y, g_w0, pct, col, alert=alert)
 
-    # 1) DWN … UP … — inverted badges = WAN curve colors
+    # 1) DWN … UP … — permanent graph title (rate always curve color; gray if idle)
     down = float(m.get("wan_down", 0) or 0)
     up = float(m.get("wan_up", 0) or 0)
-    down_col = _wan_link_color(down, _WAN_MAX_DOWN_MBPS)
-    up_col = _wan_link_color(up, _WAN_MAX_UP_MBPS)
+    down_col = DIM if (down <= 0 or _rate_is_negligible(down)) else GRAPH_DOWN
+    up_col = DIM if (up <= 0 or _rate_is_negligible(up)) else GRAPH_UP
     tr_dn = _trend_from_history(m.get("wan_history_down"), eps_abs=0.05)
     tr_up = _trend_from_history(m.get("wan_history_up"), eps_abs=0.02)
     x = _draw_sum_inv_lab(img, d, x0, y, "DWN", GRAPH_DOWN)
@@ -1851,12 +1961,10 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     show_wan_graph = sum_show_wan_graph()
     cpu = float(m.get("cpu", 0) or 0)
     ram = float(m.get("ram", 0) or 0)
-    tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
-    disk = _disk_used_pct(m)
 
+    # 2–4) Swap A: WAN graph  ↔  Hot + 2 tops
     y += 1  # line 2 starts 1px lower
     if show_wan_graph:
-        # 2–4) WAN graph over 3 rows (replaces Hot + 2 tops)
         graph_rows = 3
         graph_h = graph_rows * step - 1  # 17px
         down_h = list(m.get("wan_history_down") or [])[-64:]
@@ -1877,31 +1985,34 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         )
         y += graph_rows * step
     else:
-        # 2) Hot — spike above WiFi/LAN baseline (who eats the surplus)
         _draw_sum_hot_row(img, m, x0=x0, x1=x1, y=y)
         y += step
-
-        # 3–4) #1 top_down + D, then #1 top_up + U (tag after unit)
         y = _draw_sum_top_clients_rows(
             img, m, x0=x0, x1=x1, y=y, step=step, footer_y0=footer_y0
         )
 
-    # 5–6) Under graph: DOWN/UP WiFi|Wired balances | Clients: Wi/LAN + VPN/5G/USB
-    y += 1  # balances / Wi·VPN 1px lower
+    # 5) Wi/LAN — permanent balance title (just above swap B)
+    y += 1
+    _draw_sum_wi_lan_row(img, d, m, x0=x0, x1=x1, y=y)
+    y += step + 1  # 1px extra under Wi/LAN badges before balances / VPN+DSK
+
+    # 6–7) Swap B: DOWN/UP WiFi|Wired balances  ↔  VPN/5G/USB + DSK/TMP
     if show_wan_graph:
         y = _draw_sum_down_up_split_gauges(img, d, m, x0=x0, x1=x1, y=y, step=step)
     else:
-        _draw_sum_wi_lan_row(img, d, m, x0=x0, x1=x1, y=y)
-        y += step
         _draw_sum_vpn_usb_row(img, d, m, x0=x0, x1=x1, y=y)
         y += step
-
-    # 7) SYS/NET
-    tr_sys = _trend_from_history(_SYS_HP_HIST, eps_abs=1.0, eps_ratio=0.02)
-    tr_net = _trend_from_history(_NET_SAT_HIST, eps_abs=1.0, eps_ratio=0.02)
-    _label_trend_gauge(lab_l, "SYS", tr_sys, sys_hp, sys_col, alert=False, g_x0=g_l, g_w0=g_w)
-    _label_trend_gauge(lab_r, "NET", tr_net, net_sat, net_col, alert=False, g_x0=g_r, g_w0=g_w)
-    y += step
+        _draw_sum_dsk_tmp_row(
+            img,
+            m,
+            y=y,
+            lab_l=lab_l,
+            lab_r=lab_r,
+            lab_w=lab_w,
+            trend_w=trend_w,
+            x1=x1,
+        )
+        y += step
 
     # 8) CPU/RAM
     cpu_col = _diagram_color(cpu, kind="load")
@@ -1914,63 +2025,14 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _label_trend_gauge(lab_r, "RAM", tr_ram, ram, ram_col, alert=ram_alert, g_x0=g_r, g_w0=g_w)
     y += step
 
-    # 9) DSK/TMP — DSK +3px gap; TMP aligned with RAM; °C flush-right
-    dsk_col = _diagram_color(disk, kind="disk")
-    tmp_i = int(round(tmp))
-    tmp_hot = _is_crit_temp_tile(tmp_i)
-    tmp_col = RED if tmp_hot else _temp_tile_color(tmp_i)
-    _txt(img, lab_l, y, "DSK", LABEL, size="tiny", role="label", alert=_is_crit_disk_tile(disk))
-    _draw_val_unit(
-        img,
-        lab_l + lab_w + 5,  # was +2; +3px more gap after DSK
-        y,
-        str(int(round(disk))),
-        "%",
-        dsk_col,
-        size="tiny",
-        value_role="status",
-        alert=_is_crit_disk_tile(disk),
-    )
-    tr_tmp = _trend_from_history(m.get("temp_history"), eps_abs=0.5, eps_ratio=0.01)
-    tmp_num = str(tmp_i)
-    # Prefer °C glued to digits (gap 0) so TMP can sit on the RAM column.
-    tmp_unit_gap = 0
-    vu_w = (
-        pf.text_width(tmp_num, size="tiny")
-        + tmp_unit_gap
-        + pf.text_ink_width("°C", size="tiny")
-    )
-    # [TMP][trend][flex][nn°C] — try TMP @ lab_r (RAM); pull left only if 100°C+arrow.
-    tr_slot = trend_w if tr_tmp else 0
-    need = lab_w + tr_slot + vu_w
-    tmp_lab_x = lab_r if (lab_r + need - 1) <= x1 else max(0, x1 - need + 1)
-    bx = _txt(
-        img,
-        tmp_lab_x,
-        y,
-        "TMP",
-        RED if tmp_hot else LABEL,
-        size="tiny",
-        role="status" if tmp_hot else "label",
-    )
-    if tr_tmp:
-        bx = _draw_trend(img, bx, y, tr_tmp)
-    # Remaining slack sits between arrow and value; value+°C flush to right edge.
-    _draw_val_unit_right(
-        img,
-        x1,
-        y,
-        tmp_num,
-        "°C",
-        tmp_col,
-        size="tiny",
-        value_role="status",
-        unit_gap=tmp_unit_gap,
-    )
+    # 9) SYS/NET
+    tr_sys = _trend_from_history(_SYS_HP_HIST, eps_abs=1.0, eps_ratio=0.02)
+    tr_net = _trend_from_history(_NET_SAT_HIST, eps_abs=1.0, eps_ratio=0.02)
+    _label_trend_gauge(lab_l, "SYS", tr_sys, sys_hp, sys_col, alert=False, g_x0=g_l, g_w0=g_w)
+    _label_trend_gauge(lab_r, "NET", tr_net, net_sat, net_col, alert=False, g_x0=g_r, g_w0=g_w)
 
     # Footer: time | uptime/WAN | date
     _draw_sum_footer(img, d, m)
-
 
 def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
     screens = get_screen_ids() or ALL_SCREEN_IDS
@@ -2094,16 +2156,48 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         w_up = list(m.get("wifi_history_up") or [])
         eth_down = list(m.get("lan_history_down") or [])
         eth_up = list(m.get("lan_history_up") or [])
-        _txt(img, 2, 11, "WiFi", LABEL, size="tiny", role="label")
-        x = _draw_rate(img, 20, 11, m.get("wifi_down", 0))
-        _txt_label(img, min(x + 2, 40), 11, "Up", mbps=m.get("wifi_up", 0))
-        _draw_rate(img, min(x + 12, 48), 11, m.get("wifi_up", 0))
-        _wlc_graph_panel(img, d, 1, 18, 62, 17, w_down, w_up, GRAPH_DOWN, GRAPH_UP, fill_down=True, scale_key="wlc_wifi")
-        _txt(img, 2, 38, "Eth", LABEL, size="tiny", role="label")
-        x = _draw_rate(img, 18, 38, m.get("lan_down", 0))
-        _txt_label(img, min(x + 2, 40), 38, "Up", mbps=m.get("lan_up", 0))
-        _draw_rate(img, min(x + 12, 48), 38, m.get("lan_up", 0))
-        _wlc_graph_panel(img, d, 1, 45, 62, 16, eth_down, eth_up, ORANGE, GRAPH_UP, fill_down=False, scale_key="wlc_eth")
+        wd = float(m.get("wifi_down", 0) or 0)
+        wu = float(m.get("wifi_up", 0) or 0)
+        _txt(img, 2, 11, "WiFi", WIFI, size="tiny", role="label")
+        x = _draw_rate(
+            img,
+            20,
+            11,
+            wd,
+            color=DIM if (wd <= 0 or _rate_is_negligible(wd)) else WIFI,
+        )
+        _txt_label(img, min(x + 2, 40), 11, "Up", mbps=wu)
+        _draw_rate(
+            img,
+            min(x + 12, 48),
+            11,
+            wu,
+            color=DIM if (wu <= 0 or _rate_is_negligible(wu)) else WIFI,
+        )
+        _wlc_graph_panel(
+            img, d, 1, 18, 62, 17, w_down, w_up, WIFI, GRAPH_UP, fill_down=True, scale_key="wlc_wifi"
+        )
+        _txt(img, 2, 38, "Eth", LAN, size="tiny", role="label")
+        ld = float(m.get("lan_down", 0) or 0)
+        lu = float(m.get("lan_up", 0) or 0)
+        x = _draw_rate(
+            img,
+            18,
+            38,
+            ld,
+            color=DIM if (ld <= 0 or _rate_is_negligible(ld)) else LAN,
+        )
+        _txt_label(img, min(x + 2, 40), 38, "Up", mbps=lu)
+        _draw_rate(
+            img,
+            min(x + 12, 48),
+            38,
+            lu,
+            color=DIM if (lu <= 0 or _rate_is_negligible(lu)) else LAN,
+        )
+        _wlc_graph_panel(
+            img, d, 1, 45, 62, 16, eth_down, eth_up, LAN, GRAPH_UP, fill_down=False, scale_key="wlc_eth"
+        )
 
     elif sid == "TOP":
         downs = _pick_top(m.get("top_down"), limit=2)
@@ -2134,9 +2228,9 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         n5 = int(m.get("clients_5g", 0) or 0)
         _txt(img, 2, 10, "All", LABEL, size="normal", role="label")
         _draw_cli_count(img, 2 + pf.text_width("All", size="normal") + 3, 10, total, size="normal")
-        _txt(img, 2, 22, "WiFi", LABEL, size="tiny", role="label")
+        _txt(img, 2, 22, "WiFi", WIFI, size="tiny", role="label")
         _draw_cli_count(img, 24, 22, wifi)
-        _txt(img, 34, 22, "Eth", LABEL, size="tiny", role="label")
+        _txt(img, 34, 22, "Eth", LAN, size="tiny", role="label")
         _draw_cli_count(img, 48, 22, wired)
         _txt(img, 2, 29, LABEL_BAND_24, LABEL, size="tiny", role="label")
         _draw_cli_count(img, 22, 29, n2)
@@ -2157,7 +2251,7 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         ports = list(m.get("lan_ports") or [False, False, False, False])[:4]
         while len(ports) < 4:
             ports.append(False)
-        _txt(img, 2, 12, "LAN", LABEL, size="tiny", role="label")
+        _txt(img, 2, 12, "LAN", LAN, size="tiny", role="label")
         x = 20
         for i, up in enumerate(ports, start=1):
             _txt(img, x, 11, str(i), GREEN if up else RED, size="normal", role="status")
@@ -2165,9 +2259,9 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         wifi = int(m.get("clients_wifi", 0) or 0)
         clients = int(m.get("clients", 0) or 0)
         wired = int(m.get("clients_wired", 0) or max(0, clients - wifi))
-        _txt(img, 2, 24, "WiFi", LABEL, size="tiny", role="label")
+        _txt(img, 2, 24, "WiFi", WIFI, size="tiny", role="label")
         _draw_client_count(img, 22, 24, wifi)
-        _txt(img, 34, 24, "Eth", LABEL, size="tiny", role="label")
+        _txt(img, 34, 24, "Eth", LAN, size="tiny", role="label")
         _draw_client_count(img, 48, 24, wired)
         _txt(img, 2, 33, "All", LABEL, size="tiny", role="label")
         _draw_client_count(img, 18, 33, clients)
