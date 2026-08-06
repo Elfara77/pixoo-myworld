@@ -92,8 +92,9 @@ _NET_SAT_SMOOTH: float | None = None
 _SYS_HP_HIST: list[float] = []
 _NET_SAT_HIST: list[float] = []
 # SUM dwell D split into 8 equal slots (Σ=D):
-# Chrome (DOWN/Wi/SYS/CPU/DSK/tops) stays fixed. Only the status strip swaps:
-# 0–3 VPN/Hot Wifi; 4–7 DOWN|UP legend + WAN sparkline.
+# 0–3: 2 top-client lines only (#1 down+D, #1 up+U); 4–7: WAN sparkline.
+# After the swap block: Wi → SYS/NET → CPU/RAM → DSK/TMP → (graph: WiFi|Wired
+# balance bars) → VPN → footer.
 _SUM_DWELL_T0 = 0.0
 _SUM_DWELL_D = 1.0
 # Latched once per frame in set_sum_dwell — never recompute mid-render.
@@ -576,17 +577,18 @@ def _draw_rate_dir_tag_right(
     rate_color: Sequence[int] | None = None,
     min_x: int = 0,
 ) -> int:
-    """Draw rate then direction tag (U/D) flush-right. Returns rate start x."""
-    tag_ink = pf.text_ink_width(tag, size=size)
-    tag_x = max(0, right - tag_ink + 1)
+    """Draw ``rate`` then ``U``/``D`` glued after the unit, flush-right.
+
+    Layout: ``[rate][1px][tag]`` with last tag ink on ``right``. Returns rate start x.
+    """
+    tag_ink = max(1, pf.text_ink_width(tag, size=size))
     rate_w = _rate_ink_width(mbps, size=size)
-    # Keep rate entirely to the right of min_x (hostname column).
-    rate_right = tag_x - 2
-    rate_x = max(int(min_x), rate_right - rate_w + 1)
-    if rate_x <= rate_right:
-        _draw_rate(img, rate_x, y, mbps, size=size, color=rate_color)
-    _txt(img, tag_x, y, tag, tag_col, size=size, role="status")
-    return rate_x
+    total = rate_w + 1 + tag_ink
+    start = max(int(min_x), right - total + 1)
+    if start + rate_w - 1 >= start:
+        _draw_rate(img, start, y, mbps, size=size, color=rate_color)
+    _txt(img, start + rate_w + 1, y, tag, tag_col, size=size, role="status")
+    return start
 
 
 def _draw_val_unit_right(
@@ -876,7 +878,11 @@ def _graph_up_down(
     fill_up: bool | None = None,
     scale_key: str = "du",
 ) -> None:
-    """Down + up on one panel with shared held Y scale; optional area fills."""
+    """Down + up on one panel with shared held Y scale; layered area fills.
+
+    Draw order (back→front): blue fill → orange fill → blue stroke → orange
+    stroke. Orange fill sits in front so the blue fill reads as behind it.
+    """
     down_r = [float(v) for v in (down or [])]
     up_r = [float(v) for v in (up or [])]
     if fill_up is None:
@@ -893,13 +899,16 @@ def _graph_up_down(
 
     d_pts = _series_to_pts(down_s, x=x, y=y, w=w, h=h, ymax=ymax)
     u_pts = _series_to_pts(up_s, x=x, y=y, w=w, h=h, ymax=ymax)
-    # Fills under curves first (weaker than stroke), then strokes on top.
+    base_y = y + h - 1
+    # 1) Blue (DOWN) fill under blue curve — back layer.
     if fill_down and len(d_pts) >= 2:
-        poly = d_pts + [(d_pts[-1][0], y + h - 1), (d_pts[0][0], y + h - 1)]
-        draw.polygon(poly, fill=_graph_fill_color(col_down))
+        poly = d_pts + [(d_pts[-1][0], base_y), (d_pts[0][0], base_y)]
+        draw.polygon(poly, fill=_graph_fill_color(col_down, scale=0.42))
+    # 2) Orange (UP) fill under orange curve — in front of blue.
     if fill_up and len(u_pts) >= 2:
-        poly = u_pts + [(u_pts[-1][0], y + h - 1), (u_pts[0][0], y + h - 1)]
-        draw.polygon(poly, fill=_graph_fill_color(col_up))
+        poly = u_pts + [(u_pts[-1][0], base_y), (u_pts[0][0], base_y)]
+        draw.polygon(poly, fill=_graph_fill_color(col_up, scale=0.42))
+    # 3–4) Strokes last; orange line on top of blue.
     if len(d_pts) >= 2:
         draw.line(d_pts, fill=col_down, width=1)
     if len(u_pts) >= 2:
@@ -1016,7 +1025,7 @@ def _draw_sum_top_client_line(
     tag: str,
     tag_col: Sequence[int],
 ) -> None:
-    """Hostname left + rate+U/D right only (never a U/D prefix before the name)."""
+    """Hostname left + rate with U/D glued after the unit on the right."""
     host = str(name or "").strip()
     # Drop accidental leading direction crumbs (legacy layout / bad leases).
     while host and host[0] in "UD" and (len(host) == 1 or host[1] in " .:_-\t"):
@@ -1051,10 +1060,10 @@ def _draw_sum_top_clients_rows(
     step: int,
     footer_y0: int,
 ) -> int:
-    """Always: line1 = #1 top_up + U; line2 = #1 top_down + D. Returns y after rows."""
+    """Two lines only: #1 top_down + D, then #1 top_up + U (tag after rate unit)."""
     for entry, tag, tag_col in (
-        (_first_top(m.get("top_up")), "U", ORANGE),
         (_first_top(m.get("top_down")), "D", GREEN),
+        (_first_top(m.get("top_up")), "U", ORANGE),
     ):
         if y + 4 >= footer_y0:
             break
@@ -1440,20 +1449,11 @@ def _draw_sum_vpn_usb_row(
     x1: int,
     y: int,
 ) -> None:
-    """VPN123 … [5G]n … USB23 — 5G badge fixed mid (black on orange like Wi)."""
+    """VPN123 … [5G]n … USB23 — 5G badge centered last so it stays visible."""
     x = x0
     x = _txt(img, x, y, "VPN", LABEL, size="tiny", role="label")
     for i, (_name, on, _typ) in enumerate(_vpn_slots(m)[:3], start=1):
         x = _txt(img, x, y, str(i), GREEN if on else RED, size="tiny", role="status")
-
-    n5 = max(0, int(m.get("clients_5g", 0) or 0))
-    cnt = str(min(99, n5))
-    five_bw = max(1, pf.text_ink_width("5G", size="tiny")) + 2
-    mid_w = five_bw + 1 + pf.text_ink_width(cnt, size="tiny")
-    # Fixed screen-centered cluster so it does not shift with VPN/USB widths.
-    mx = max(x0, (x0 + x1 - mid_w + 1) // 2)
-    mx = _draw_sum_inv_lab(img, draw, mx, y, "5G", ORANGE)
-    _txt(img, mx + 1, y, cnt, DIM if n5 == 0 else FG, size="tiny", role="status")
 
     usb2 = m.get("usb2") or {}
     usb3 = m.get("usb3") or {}
@@ -1465,6 +1465,17 @@ def _draw_sum_vpn_usb_row(
     ux = _txt(img, ux, y, "USB", LABEL, size="tiny", role="label")
     ux = _txt(img, ux, y, "2", GREEN if u2 else RED, size="tiny", role="status")
     _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
+
+    # Mid 5GHz count drawn last (inverted badge) so VPN/USB cannot cover it.
+    n5 = max(0, int(m.get("clients_5g", 0) or 0))
+    cnt = str(min(99, n5))
+    five_bw = max(1, pf.text_ink_width("5G", size="tiny")) + 2
+    mid_w = five_bw + 1 + pf.text_ink_width(cnt, size="tiny")
+    mx = max(x0, (x0 + x1 - mid_w + 1) // 2)
+    # Keep clear of VPN ink on the left when possible.
+    mx = max(mx, x + 2)
+    mx = _draw_sum_inv_lab(img, draw, mx, y, "5G", ORANGE)
+    _txt(img, mx + 1, y, cnt, DIM if n5 == 0 else FG, size="tiny", role="status")
 
 
 def _draw_sum_down_up_legend_row(
@@ -1493,8 +1504,12 @@ def _draw_sum_inv_lab(
     pad = 1
     ink = max(1, pf.text_ink_width(text, size="tiny"))
     bw = ink + pad * 2
-    # 1px above + 5px glyph + 1px below → taller color band on Wi/LAN only.
-    draw.rectangle([x, y - pad, x + bw - 1, y + 4 + pad], fill=fill, outline=fill)
+    # 1px above + 5px glyph + 1px below; clamp top so y=0 badges stay on-canvas.
+    draw.rectangle(
+        [x, max(0, y - pad), x + bw - 1, y + 4 + pad],
+        fill=fill,
+        outline=fill,
+    )
     pf.draw_tiny(img, x + pad, y, text, (0, 0, 0))
     return x + bw
 
@@ -1530,7 +1545,7 @@ def _draw_sum_wi_lan_row(
 
 
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """Full-bleed summary: DOWN/UP rates first; 2 top hosts; footer time/uptime/date inverted."""
+    """Full-bleed SUM: rates → graph|tops → Wi → gauges → [bars] → VPN/5G/USB → footer."""
     sys_hp = _system_health_score(m)
     net_sat = _network_saturation(m)
     sys_col = _sys_health_color(sys_hp)
@@ -1541,7 +1556,6 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     # Full width — no side gutter (pixels 0 and 63 used).
     x0, x1 = 0, 63
     # Shared columns. Right labels (NET/RAM/TMP) share one X so they line up.
-    # Reserve: LABEL + trend slot + gap + max "100°C" (empty slot when no arrow).
     lab_w = pf.text_width("SYS", size="tiny")
     lab_l = x0
     trend_w = pf.text_width("↑", size="tiny")
@@ -1549,7 +1563,6 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         pf.text_width("100", size="tiny") + 1 + pf.text_ink_width("°C", size="tiny")
     )
     lab_r = x1 - (lab_w + trend_w + 2 + tmp_val_max) + 1
-    # Gauges start after label + reserved trend slot (SYS/NET/CPU/RAM).
     content_l = lab_l + lab_w + trend_w
     content_r = lab_r + lab_w + trend_w
     g_l = content_l
@@ -1557,40 +1570,64 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     g_r = content_r
     g_w_r = max(4, x1 - g_r + 1)
     step = 6  # 5px tiny glyph + 1px row gap
+    footer_y0 = 64 - 7
     y = 0
 
     def _right_x(text: str) -> int:
-        # Flush last ink to x1 (tiny advance width leaves a dead trailing px).
         return x1 - pf.text_ink_width(text, size="tiny") + 1
 
-    # 1) DOWN↑ rate | UP↑ rate — trend glued to label
+    # 1) DWN↑ rate | UP↑ rate — inverted badges match WAN curve colors.
     down = float(m.get("wan_down", 0) or 0)
     up = float(m.get("wan_up", 0) or 0)
     down_col = _wan_link_color(down, _WAN_MAX_DOWN_MBPS)
     up_col = _wan_link_color(up, _WAN_MAX_UP_MBPS)
     tr_dn = _trend_from_history(m.get("wan_history_down"), eps_abs=0.05)
     tr_up = _trend_from_history(m.get("wan_history_up"), eps_abs=0.02)
-    x = _txt(img, x0, y, "DOWN", LABEL, size="tiny", role="label")
-    x = _draw_trend(img, x, y, tr_dn)  # glued to label
+    x = _draw_sum_inv_lab(img, d, x0, y, "DWN", GRAPH_DOWN)
+    x = _draw_trend(img, x, y, tr_dn)
     x += 1
     _draw_rate(img, x, y, down, color=down_col)
+    up_badge_w = max(1, pf.text_ink_width("UP", size="tiny")) + 2
     up_rate_w = _rate_ink_width(up)
     tr_up_w = pf.text_width(tr_up, size="tiny") if tr_up else 0
-    up_lab_w = pf.text_width("UP", size="tiny")
-    block = up_lab_w + tr_up_w + 1 + up_rate_w
-    ux = x1 - block + 1
-    ux = _txt(img, ux, y, "UP", LABEL, size="tiny", role="label")
+    ux = x1 - (up_badge_w + tr_up_w + 1 + up_rate_w) + 1
+    ux = _draw_sum_inv_lab(img, d, ux, y, "UP", GRAPH_UP)
     ux = _draw_trend(img, ux, y, tr_up)
     ux += 1
     _draw_rate(img, ux, y, up, color=up_col)
     y += step
 
-    # 2) Wi wifi/total …… LAN1234 (moved up; inverted Wi/LAN labels)
+    # 2) Graph (5px) OR two top-client lines only (hostname | rate+D / rate+U).
+    show_wan_graph = sum_show_wan_graph()
+    if show_wan_graph:
+        graph_h = step - 1  # 5px — keep previous sparkline height
+        down_h = list(m.get("wan_history_down") or [])[-64:]
+        up_h = list(m.get("wan_history_up") or [])[-64:]
+        _graph_up_down(
+            img,
+            d,
+            x0,
+            y,
+            64,
+            graph_h,
+            down_h,
+            up_h,
+            GRAPH_DOWN,
+            GRAPH_UP,
+            fill_down=True,
+            scale_key="sum_wan",
+        )
+        y += step
+    else:
+        y = _draw_sum_top_clients_rows(
+            img, m, x0=x0, x1=x1, y=y, step=step, footer_y0=footer_y0
+        )
+
+    # 3) Wi wifi/total …… LAN1234 — immediately under graph / tops block
     _draw_sum_wi_lan_row(img, d, m, x0=x0, x1=x1, y=y)
     y += step
 
-    # 3–4) SYS/NET + CPU/RAM — always (graph half only swaps legend/Hot below).
-    show_wan_graph = sum_show_wan_graph()
+    # 4–5) SYS/NET + CPU/RAM
     cpu = float(m.get("cpu", 0) or 0)
     ram = float(m.get("ram", 0) or 0)
     tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
@@ -1629,7 +1666,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _label_trend_gauge(lab_r, "RAM", tr_ram, ram, ram_col, alert=ram_alert, g_x0=g_r, g_w0=g_w_r)
     y += step
 
-    # 5) DSK % …… TMP↑ °C — TMP label at same lab_r as NET/RAM
+    # 6) DSK % …… TMP↑ °C
     dsk_col = _diagram_color(disk, kind="disk")
     tmp_i = int(round(tmp))
     tmp_hot = _is_crit_temp_tile(tmp_i)
@@ -1658,78 +1695,20 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         role="status" if tmp_hot else "label",
     )
     bx = _draw_trend(img, bx, y, tr_tmp)
-    bx = max(bx, content_r)  # keep value column aligned with NET/RAM gauges
+    bx = max(bx, content_r)
     bx += 2
     _draw_val_unit(img, bx, y, tmp_num, "°C", tmp_col, size="tiny", value_role="status")
     y += step
 
-    # 6) Graph: DOWN……UP legend | Clients: VPN … 5Gn … USB
-    if show_wan_graph:
-        _draw_sum_down_up_legend_row(img, d, x0=x0, x1=x1, y=y)
-    else:
+    # 7) Graph half: WiFi|Wired balance bars (fills the rows Hot+tops free up).
+    if show_wan_graph and y + step + 4 < footer_y0:
+        y = _draw_sum_down_up_split_gauges(img, d, m, x0=x0, x1=x1, y=y, step=step)
+
+    # 8) VPN … 5Gn … USB
+    if y + 4 < footer_y0:
         _draw_sum_vpn_usb_row(img, d, m, x0=x0, x1=x1, y=y)
-    y += step
 
-    # 7–8) One status/graph row, then 2 top-client rows for the whole SUM dwell.
-    # Tops always: #1 top_up + U, #1 top_down + D (hostname | rate+tag only).
-    footer_y0 = 64 - 7
-    block_y0 = y
-    if show_wan_graph:
-        # Sparkline row under DOWN|UP legend; tops keep the next two rows.
-        graph_h = step - 1  # 5px — one tiny row
-        down_h = list(m.get("wan_history_down") or [])[-64:]
-        up_h = list(m.get("wan_history_up") or [])[-64:]
-        _graph_up_down(
-            img,
-            d,
-            x0,
-            block_y0,
-            64,
-            graph_h,
-            down_h,
-            up_h,
-            GRAPH_DOWN,
-            GRAPH_UP,
-            fill_down=True,
-            scale_key="sum_wan",
-        )
-        y = block_y0 + step
-    else:
-        # Hot Wifi n …… down_rate up_rate (hottest Wi‑Fi STA)
-        n_hot, hot = _greedy_clients(m, limit=3)
-        n_show = min(9, int(n_hot))
-        hot_col = DIM if n_show == 0 else FG
-        hot_lab = "Hot Wifi"
-        _txt(img, x0, y, hot_lab, LABEL, size="tiny", role="label")
-        _txt(
-            img,
-            x0 + pf.text_width(hot_lab, size="tiny") + 2,
-            y,
-            str(n_show),
-            hot_col,
-            size="tiny",
-            role="status",
-        )
-        if hot:
-            _hn, hd, hu, _hutil = hot[0]
-            up_w = _rate_ink_width(hu)
-            _draw_rate_right(img, x1, y, hu, color=_wan_link_color(hu, _WAN_MAX_UP_MBPS))
-            _draw_rate_right(
-                img,
-                x1 - up_w - 2,
-                y,
-                hd,
-                color=_wan_link_color(hd, _WAN_MAX_DOWN_MBPS),
-            )
-        else:
-            _txt(img, _right_x("--"), y, "--", DIM, size="tiny", role="status")
-        y += step
-
-    y = _draw_sum_top_clients_rows(
-        img, m, x0=x0, x1=x1, y=y, step=step, footer_y0=footer_y0
-    )
-
-    # 9) Footer pinned to bottom: continuous 7px inverted band
+    # 9) Footer: time | uptime/WAN | date
     _draw_sum_footer(img, d, m)
 
 
