@@ -459,7 +459,7 @@ ALL_PIXOO_SCREEN_LABELS=(
 OPT_PIXOO_SCREENS=(SUM SUM_GRAPH)
 OPT_PIXOO_SCREEN_LABELS=(
   "SUM Summary health (opt, no banner)"
-  "SUM_GRAPH Graphical summary (opt, sparklines)"
+  "SUM_GRAPH WAN down/up history 64 samples (opt)"
 )
 
 print_visual_profile() {
@@ -689,26 +689,24 @@ configure_screens() {
     echo ""
   done
 
-  # Encode: bare defaults → all ; defaults+SUM → all,SUM ; else explicit list
-  local -a defs=() extras=()
-  local x found i
-  for (( i=0; i<${#on[@]}; i++ )); do
-    x="${on[$i]}"
-    found=0
-    for sid in "${ALL_PIXOO_SCREENS[@]}"; do
-      if [[ "${x}" == "${sid}" ]]; then found=1; break; fi
-    done
-    if (( found )); then defs+=("${x}"); else extras+=("${x}"); fi
-  done
-  if (( ${#defs[@]} == ${#ALL_PIXOO_SCREENS[@]} )); then
-    if (( ${#extras[@]} == 0 )); then
-      PIXOO_SCREENS="all"
-    else
-      PIXOO_SCREENS="all,$(IFS=,; echo "${extras[*]}")"
-    fi
-  else
-    PIXOO_SCREENS="$(IFS=,; echo "${on[*]}")"
+  # Always persist the exact selected ids (no "all" shorthand on the wire).
+  # Ambiguous "all" made deselected defaults reappear after reload/parse mismatches.
+  if (( ${#on[@]} < 1 )); then
+    echo "  ⚠ au moins 1 écran requis — conservation de la sélection précédente."
+    return 1
   fi
+  # Dedupe preserving order
+  local -a uniq=()
+  local x u dup
+  for x in "${on[@]}"; do
+    dup=0
+    for u in "${uniq[@]}"; do
+      [[ "${u}" == "${x}" ]] && { dup=1; break; }
+    done
+    (( dup )) || uniq+=("${x}")
+  done
+  on=("${uniq[@]}")
+  PIXOO_SCREENS="$(IFS=,; echo "${on[*]}")"
   echo "→ écrans = ${PIXOO_SCREENS} (${#on[@]} actif(s))"
 }
 
@@ -729,6 +727,10 @@ apply_visual_remote() {
     return 0
   fi
   echo "==> appliquer le profil visuel sur Merlin…"
+  # Quote screens for remote sed (commas are fine; escape | and \&)
+  local screens_q="${PIXOO_SCREENS//\\/\\\\}"
+  screens_q="${screens_q//|/\\|}"
+  screens_q="${screens_q//&/\\&}"
   remote "
     CFG='${REMOTE_PATH}/config.env'
     _set() {
@@ -753,12 +755,13 @@ apply_visual_remote() {
     _set PIXOO_WLC_GRAPH_MODE '${PIXOO_WLC_GRAPH_MODE}'
     _set PIXOO_WAN_MAX_DOWN_MBPS '${PIXOO_WAN_MAX_DOWN_MBPS}'
     _set PIXOO_WAN_MAX_UP_MBPS '${PIXOO_WAN_MAX_UP_MBPS}'
-    _set PIXOO_SCREENS '${PIXOO_SCREENS}'
+    _set PIXOO_SCREENS '${screens_q}'
     echo 'config.env updated'
+    grep '^PIXOO_SCREENS=' \"\${CFG}\" || true
   "
   if remote "test -x '${REMOTE_PATH}/watchdog.sh'" 2>/dev/null; then
     remote "'${REMOTE_PATH}/watchdog.sh' reload" || remote "'${REMOTE_PATH}/watchdog.sh' start" || true
-    echo "Bridge rechargé avec le nouveau profil."
+    echo "Bridge rechargé — écrans: ${PIXOO_SCREENS}"
   else
     echo "Watchdog absent — profil sauvé ; démarrer après install."
   fi
@@ -1515,7 +1518,10 @@ menu_arrow() {
         run_menu_action "${action}"
         [[ "${action}" == "quit" ]] && exit 0
         pause_return
-        need_status=1
+        # Skip SSH status refresh — that was the multi-second lag after ENTER.
+        # User can run "Refresh status" when they want a live probe.
+        need_status=0
+        clear_screen
         ;;
       quit)
         if [[ "${items_name}" == "PILOT_MENU_ITEMS" ]]; then
