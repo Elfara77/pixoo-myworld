@@ -884,7 +884,7 @@ def _client_dir_rate(down_mbps: float, up_mbps: float, tag: str) -> tuple[float,
 
 
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """Full-bleed summary: edge-to-edge (x=0..63), DWN first; 3 top hosts pinned at bottom."""
+    """Full-bleed summary: edge-to-edge (x=0..63), DWN first; 3 top hosts after Hot."""
     sys_hp = _system_health_score(m)
     net_sat = _network_saturation(m)
     sys_col = _sys_health_color(sys_hp)
@@ -899,10 +899,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     g_w = 16
     g_r = x1 - g_w + 1
     lab_r = g_r - 1 - lab_w
-    step = 5  # tiny glyph height; rows abut
-    # Reserve last 3 rows for top clients so they are never clipped.
-    top_n = 3
-    top_y0 = 64 - top_n * step  # 49, 54, 59
+    step = 6  # 5px tiny glyph + 1px row gap
     y = 0
 
     def _right_x(text: str) -> int:
@@ -1019,9 +1016,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
     y += step
 
-    # 7) Hot n …… peak tag (stay above reserved top block)
-    if y > top_y0 - step:
-        y = top_y0 - step
+    # 7) Hot n …… peak tag
     n_hot, hot = _greedy_clients(m, limit=3)
     n_show = min(9, int(n_hot))
     hot_col = DIM if n_show == 0 else (YELLOW if n_show < 3 else RED)
@@ -1043,27 +1038,31 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         _txt(img, _right_x(pk), y, pk, pk_col, size="tiny", role="status")
     else:
         _txt(img, _right_x("--"), y, "--", DIM, size="tiny", role="status")
+    y += step
 
-    # 8) Exactly 3 top-client rows, pinned at bottom (49 / 54 / 59)
-    tops = _rank_clients_by_wan_util(m)[:top_n]
+    # 8) Exactly 3 top-client rows, immediately under Hot (no gap)
+    tops = _rank_clients_by_wan_util(m)[:3]
     tag_cols = {"D": GRAPH_DOWN, "U": ORANGE, "B": RED}
-    for i in range(top_n):
-        ty = top_y0 + i * step
+    for i in range(3):
+        if y > 58:
+            break
         if i >= len(tops):
-            _txt(img, x0, ty, "-", DIM, size="tiny", role="status")
+            _txt(img, x0, y, "-", DIM, size="tiny", role="status")
+            y += step
             continue
         name, cd, cu, _util = tops[i]
         tag = _client_dir_tag(cd, cu)
         rate, cap = _client_dir_rate(cd, cu, tag)
         host_col = _top_hostname_color(cd, cu)
         rate_col = _wan_link_color(rate, cap)
-        _txt(img, x0, ty, tag, tag_cols.get(tag, FG), size="tiny", role="status")
+        _txt(img, x0, y, tag, tag_cols.get(tag, FG), size="tiny", role="status")
         rate_w = _rate_pixel_width(rate)
         name_x = x0 + pf.text_width(tag, size="tiny") + 2
         max_name_w = max(0, x1 - rate_w - 2 - name_x + 1)
         shown = _truncate_to_width(str(name), max_name_w)
-        _txt(img, name_x, ty, shown, host_col, size="tiny", role="status")
-        _draw_rate_right(img, x1, ty, rate, color=rate_col)
+        _txt(img, name_x, y, shown, host_col, size="tiny", role="status")
+        _draw_rate_right(img, x1, y, rate, color=rate_col)
+        y += step
 
 
 def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
