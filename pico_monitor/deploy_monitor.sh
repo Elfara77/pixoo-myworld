@@ -455,10 +455,11 @@ ALL_PIXOO_SCREEN_LABELS=(
   "PIE Disks"
   "SRV Services"
 )
-# Optional (not in "all") — pick explicitly or all,SUM
-OPT_PIXOO_SCREENS=(SUM)
+# Optional (not in "all") — pick explicitly or all,SUM / all,SUM_GRAPH
+OPT_PIXOO_SCREENS=(SUM SUM_GRAPH)
 OPT_PIXOO_SCREEN_LABELS=(
   "SUM Summary health (opt, no banner)"
+  "SUM_GRAPH Graphical summary (opt, sparklines)"
 )
 
 print_visual_profile() {
@@ -585,7 +586,7 @@ configure_screens() {
   echo "╔══════════════════════════════════════════╗"
   echo "║  Sélection des écrans Pixoo              ║"
   echo "╚══════════════════════════════════════════╝"
-  echo "  all = défauts (sans SUM) · SUM = résumé optionnel · ≥1 requis"
+  echo "  all = défauts (sans SUM) · SUM / SUM_GRAPH = résumés optionnels · ≥1 requis"
   echo ""
 
   local -a on=() pick=()
@@ -652,10 +653,10 @@ configure_screens() {
         printf '   %d) [ ] %s\n' "$((i + 1))" "${label}"
       fi
     done
-    echo "   a) défauts (sans SUM)   s) SUM seul   n) aucun   d) done"
+    echo "   a) défauts (sans SUM)   s) SUM seul   g) SUM_GRAPH   n) aucun   d) done"
     echo ""
     local c
-    read -r -p "Toggle [1-${#pick[@]}/a/s/n/d]: " c
+    read -r -p "Toggle [1-${#pick[@]}/a/s/g/n/d]: " c
     c="${c:-d}"
     case "${c}" in
       a|A|all)
@@ -663,6 +664,9 @@ configure_screens() {
         ;;
       s|S|sum|SUM)
         on=("SUM")
+        ;;
+      g|G|sum_graph|SUM_GRAPH|graph|GRAPH)
+        on=("SUM_GRAPH")
         ;;
       n|N|none)
         on=()
