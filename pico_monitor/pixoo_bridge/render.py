@@ -760,6 +760,47 @@ def _gauge(draw, x: int, y: int, w: int, pct: float, color, *, alert: bool = Fal
     draw.rectangle([x + 1, y + 1, x + fill, y + 3], fill=color)
 
 
+def _sta_rate_totals(m: dict[str, Any]) -> tuple[float, float]:
+    """Total WiFi STA Mbps from metrics ``sta_*`` or summed ``top_*`` rows."""
+    try:
+        sd = float(m.get("sta_down") or 0)
+        su = float(m.get("sta_up") or 0)
+    except (TypeError, ValueError):
+        sd = su = 0.0
+    if sd > 0 or su > 0:
+        return max(0.0, sd), max(0.0, su)
+    sd = sum(r for _n, r in _hot_parse_tops(m.get("top_down"), typ="wifi"))
+    su = sum(r for _n, r in _hot_parse_tops(m.get("top_up"), typ="wifi"))
+    return sd, su
+
+
+def _corrected_wifi_lan_rates(m: dict[str, Any]) -> tuple[float, float, float, float]:
+    """WiFi/LAN Mbps with CTF STA re-attribution (same idea as metrics reconcile).
+
+    Balance gauges must not trust raw ``lan_*`` when STA downloads are parked
+    on switch ports. Prefer ``max(iface, sta)`` for wifi and peel that off LAN.
+    """
+    wd = float(m.get("wifi_down", 0) or 0)
+    wu = float(m.get("wifi_up", 0) or 0)
+    ld = float(m.get("lan_down", 0) or 0)
+    lu = float(m.get("lan_up", 0) or 0)
+    sd, su = _sta_rate_totals(m)
+    wan_d = float(m.get("wan_down", 0) or 0)
+    wan_u = float(m.get("wan_up", 0) or 0)
+
+    if sd > wd:
+        ld = max(0.0, ld - (sd - wd))
+        wd = sd
+    if su > wu:
+        lu = max(0.0, lu - (su - wu))
+        wu = su
+    if wan_d > 1.0 and wd + ld > wan_d * 1.15:
+        ld = max(0.0, wan_d - wd)
+    if wan_u > 0.5 and wu + lu > wan_u * 1.15:
+        lu = max(0.0, wan_u - wu)
+    return wd, wu, ld, lu
+
+
 def _wifi_wired_split_bar(
     draw: ImageDraw.ImageDraw,
     x: int,
@@ -811,6 +852,7 @@ def _draw_sum_down_up_split_gauges(
     gx = x0 + lab_w  # was +1 gap; start 1px earlier to match SYS/CPU
     gw = max(4, x1 - gx + 1)
     bar_h = 5
+    wifi_d, wifi_u, lan_d, lan_u = _corrected_wifi_lan_rates(m)
 
     _txt(img, x0, y, "DOWN", LABEL, size="tiny", role="label")
     _wifi_wired_split_bar(
@@ -818,8 +860,8 @@ def _draw_sum_down_up_split_gauges(
         gx,
         y,
         gw,
-        float(m.get("wifi_down", 0) or 0),
-        float(m.get("lan_down", 0) or 0),
+        wifi_d,
+        lan_d,
         h=bar_h,
     )
     y += step
@@ -830,8 +872,8 @@ def _draw_sum_down_up_split_gauges(
         gx,
         y,
         gw,
-        float(m.get("wifi_up", 0) or 0),
-        float(m.get("lan_up", 0) or 0),
+        wifi_u,
+        lan_u,
         h=bar_h,
     )
     return y + step
@@ -858,14 +900,24 @@ def _graph_fill_color(color: Sequence[int], *, scale: float = 0.38) -> tuple[int
 _GRAPH_Y_HOLD: dict[str, float] = {}
 
 
-def _held_ymax(key: str, raw: float, *, decay: float = 0.94) -> float:
-    """Instant rise, slow decay — kills temporal rescale jumps."""
-    raw = max(0.01, float(raw or 0))
+def _held_ymax(key: str, raw: float, *, headroom: float = 1.06, smooth: float = 0.5) -> float:
+    """Auto Y scale from the visible window max — rises and falls.
+
+    Previously: instant rise + very slow decay (0.94) left the curve flat at
+    the bottom after a spike. Now the scale tracks the current window both
+    ways (symmetric smooth), with a snap when the gap is large.
+    """
+    target = max(0.01, float(raw or 0) * float(headroom))
     prev = _GRAPH_Y_HOLD.get(key)
-    if prev is None or raw > prev:
-        held = raw
+    if prev is None:
+        held = target
     else:
-        held = max(raw, prev * decay)
+        # Symmetric pull toward target (up and down).
+        held = prev + (target - prev) * max(0.05, min(1.0, float(smooth)))
+        # Fast catch-up either direction when far off.
+        if target > prev * 1.2 or target < prev * 0.8:
+            held = target
+    held = max(0.01, held)
     _GRAPH_Y_HOLD[key] = held
     return held
 
@@ -1036,6 +1088,8 @@ def _demo_metrics() -> dict[str, Any]:
         "wifi_up": round(up * 0.6, 2),
         "lan_down": round(down * 0.25, 2),
         "lan_up": round(up * 0.35, 2),
+        "sta_down": round(down * 0.7, 2),
+        "sta_up": round(up * 0.6, 2),
         "wifi_history_down": [x * 0.7 + 2 * abs(math.sin((t - i) / 7)) for i, x in enumerate(hist_d)],
         "wifi_history_up": [x * 0.6 for x in hist_u],
         "lan_history_down": [x * 0.2 + 5 * abs(math.sin((t - i) / 5)) for i, x in enumerate(hist_d)],
@@ -1183,16 +1237,17 @@ def _hot_parse_tops(rows: Any, *, typ: str | None = "wifi") -> list[tuple[str, f
 
 
 def compute_hot_label(m: dict[str, Any]) -> str:
-    """Hot line for SUM: sustained high rate and/or spike-above-baseline.
+    """Hot line for SUM: prefer WiFi STA rates, then iface wifi/lan.
 
-    Side split from ``wifi_*`` / ``lan_*``. WiFi STA names from ``top_*`` may
-    only claim the WiFi side. Hysteresis keeps a label while activity stays
-    above ``_HOT_CLEAR_MBPS`` so a steady download does not flicker to ``--``.
+    Broadcom CTF often reports WiFi downloads on ``lan_*`` while
+    ``top_down`` (wl sta_info) still names the STA — STA wins in that case.
     """
     wifi_d = float(m.get("wifi_down", 0) or 0)
     wifi_u = float(m.get("wifi_up", 0) or 0)
     lan_d = float(m.get("lan_down", 0) or 0)
     lan_u = float(m.get("lan_up", 0) or 0)
+    wan_d = float(m.get("wan_down", 0) or 0)
+    wan_u = float(m.get("wan_up", 0) or 0)
 
     w_act, w_dir, w_cur = _hot_best_side(
         m.get("wifi_history_down"),
@@ -1207,74 +1262,74 @@ def compute_hot_label(m: dict[str, Any]) -> str:
         lan_u,
     )
 
-    tops = _hot_parse_tops(
-        m.get("top_down") if w_dir == "D" else m.get("top_up"),
-        typ="wifi",
-    )
-    top1_name, top1_rate = (tops[0] if tops else ("", 0.0))
-    n_hot = sum(1 for _n, r in tops if r >= _HOT_MULTI_CLIENT_MBPS)
+    tops_d = _hot_parse_tops(m.get("top_down"), typ="wifi")
+    tops_u = _hot_parse_tops(m.get("top_up"), typ="wifi")
+    top_d_name, top_d_rate = (tops_d[0] if tops_d else ("", 0.0))
+    top_u_name, top_u_rate = (tops_u[0] if tops_u else ("", 0.0))
+    # Pick STA direction by rate (not by iface surplus — CTF skews that).
+    if top_d_rate >= top_u_rate:
+        top1_name, top1_rate, sta_dir = top_d_name, top_d_rate, "D"
+        wan_ref = wan_d
+        n_hot = sum(1 for _n, r in tops_d if r >= _HOT_MULTI_CLIENT_MBPS)
+    else:
+        top1_name, top1_rate, sta_dir = top_u_name, top_u_rate, "U"
+        wan_ref = wan_u
+        n_hot = sum(1 for _n, r in tops_u if r >= _HOT_MULTI_CLIENT_MBPS)
 
-    # Enter at THRESH; stay latched while either side ≥ CLEAR (see hold below).
     was_hot = str(_hot_hold.get("label") or "").strip() not in ("", "Hot --", "Hot")
+    # STA/wifi may use clear floor while latched; LAN always needs full thresh
+    # so a stuck "Hot LAN" cannot linger on ~5 Mbps background.
     enter = _HOT_CLEAR_MBPS if was_hot else _HOT_THRESH_MBPS
-    w_hot = w_act >= enter
-    l_hot = l_act >= enter
-    wifi_dom = w_hot and (not l_hot or l_act < w_act * _HOT_LAN_DOMINATES)
-    lan_dom = l_hot and (not w_hot or w_act < l_act * _HOT_LAN_DOMINATES)
-    mixed = w_hot and l_hot and not wifi_dom and not lan_dom
+
+    name = (top1_name or "").strip()
+    named = bool(name) and name not in ("?", "-", "--")
+    # STA owns the flow if it covers WAN or the louder wifi/lan bucket (CTF).
+    bucket = max(wan_ref, w_act, l_act, w_cur, l_cur, 0.0)
+    sta_owns = top1_rate >= enter and bucket > 0 and top1_rate >= bucket * _HOT_CLIENT_SHARE
+    # LAN is independent only when STA does not explain most of the LAN bucket.
+    lan_indep = l_act >= _HOT_THRESH_MBPS and top1_rate < l_act * (1.0 - _HOT_LAN_DOMINATES)
+    wifi_iface_hot = w_act >= enter
 
     w_rate_s = format_hot_bitrate(w_cur if w_cur > 0 else w_act)
     l_rate_s = format_hot_bitrate(l_cur if l_cur > 0 else l_act)
-    name = (top1_name or "").strip()
-    named = bool(name) and name not in ("?", "-", "--")
-    # Name STA against current WiFi rate (sustained), not vanishing surplus.
-    wifi_ref = max(w_cur, w_act)
-    sta_covers_wifi = top1_rate >= _HOT_CLEAR_MBPS and wifi_ref > 0 and (
-        top1_rate >= wifi_ref * _HOT_CLIENT_SHARE
-    )
+    sta_rate_s = format_hot_bitrate(top1_rate)
 
     label = "Hot --"
-    if wifi_dom:
-        if sta_covers_wifi:
-            rate_s = format_hot_bitrate(top1_rate if top1_rate > 0 else w_cur)
-            label = f"Hot {name} {rate_s} {w_dir}" if named else f"Hot WiFi {rate_s} {w_dir}"
-        else:
-            n = max(2, n_hot) if n_hot >= 2 else (n_hot if n_hot > 0 else 0)
-            if n >= 2 and top1_rate < wifi_ref * _HOT_CLIENT_SHARE:
-                label = f"Hot WiFi {n} clients"
-            else:
-                label = f"Hot WiFi {w_rate_s} {w_dir}"
-    elif lan_dom:
+    if sta_owns and named and lan_indep:
+        label = f"Hot {name} {sta_rate_s} {sta_dir} + LAN {l_rate_s} {l_dir}"
+    elif sta_owns and named:
+        label = f"Hot {name} {sta_rate_s} {sta_dir}"
+    elif sta_owns:
+        label = f"Hot WiFi {sta_rate_s} {sta_dir}"
+    elif lan_indep and not wifi_iface_hot:
         label = f"Hot LAN {l_rate_s} {l_dir}"
-    elif mixed:
-        if sta_covers_wifi and named:
-            label = (
-                f"Hot {name} {format_hot_bitrate(top1_rate)} {w_dir}"
-                f" + LAN {l_rate_s} {l_dir}"
-            )
+    elif lan_indep and wifi_iface_hot:
+        label = f"Hot WiFi {w_rate_s} {w_dir} + LAN {l_rate_s} {l_dir}"
+    elif wifi_iface_hot:
+        if n_hot >= 2 and top1_rate < max(w_act, w_cur) * _HOT_CLIENT_SHARE:
+            label = f"Hot WiFi {max(2, n_hot)} clients"
         else:
-            label = f"Hot WiFi {w_rate_s} {w_dir} + LAN {l_rate_s} {l_dir}"
+            label = f"Hot WiFi {w_rate_s} {w_dir}"
 
-    # Hold previous Hot while activity still above clear floor (STA sample gaps).
-    act = max(w_act, l_act)
+    # Hold named WiFi STA across brief top_* gaps only — never sticky Hot LAN.
+    act = max(w_act, l_act, top1_rate, wan_ref)
     prev = str(_hot_hold.get("label") or "Hot --")
-    if label == "Hot --" and prev not in ("Hot --", "Hot", "") and act >= _HOT_CLEAR_MBPS:
-        label = prev
-    elif (
-        label.startswith("Hot WiFi")
-        and " + LAN " not in label
-        and prev.startswith("Hot ")
+    if (
+        label == "Hot --"
         and act >= _HOT_CLEAR_MBPS
-        and wifi_dom
+        and prev.startswith("Hot ")
+        and not prev.startswith("Hot LAN")
+        and " + LAN " not in prev
     ):
-        # Keep named STA across brief top_* zeros: "Hot Mac 180M D"
         parts = prev.split()
         if (
             len(parts) >= 4
             and parts[1] not in ("WiFi", "LAN", "--")
             and parts[-1] in ("D", "U")
         ):
-            label = f"Hot {parts[1]} {w_rate_s} {w_dir}"
+            label = f"Hot {parts[1]} {format_hot_bitrate(max(top1_rate, w_cur, w_act))} {parts[-1]}"
+        elif prev.startswith("Hot WiFi"):
+            label = prev
 
     _hot_hold["label"] = label
     _hot_hold["act"] = act
@@ -2069,45 +2124,52 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             _draw_trend(img, lab_x + lab_w, y, mark)
         _gauge(d, g_x0, y, g_w0, pct, col, alert=alert)
 
-    # 1) DWN … UP … — graph face: median (M badge); clients face: trend + instant
+    # 1) DWN … UP … — graph face: M+median (ex-arrows) + instant rate (tracks curve)
+    #                  clients face: trend arrows + instant
     down = float(m.get("wan_down", 0) or 0)
     up = float(m.get("wan_up", 0) or 0)
     show_wan_graph = sum_show_wan_graph()
     down_h = list(m.get("wan_history_down") or [])[-64:]
     up_h = list(m.get("wan_history_up") or [])[-64:]
+    down_col = DIM if (down <= 0 or _rate_is_negligible(down)) else GRAPH_DOWN
+    up_col = DIM if (up <= 0 or _rate_is_negligible(up)) else GRAPH_UP
     if show_wan_graph:
         med_d = _median(down_h)
         med_u = _median(up_h)
-        d_val = float(med_d) if med_d is not None else down
-        u_val = float(med_u) if med_u is not None else up
-        down_col = DIM if (d_val <= 0 or _rate_is_negligible(d_val)) else GRAPH_DOWN
-        up_col = DIM if (u_val <= 0 or _rate_is_negligible(u_val)) else GRAPH_UP
+        med_d_v = float(med_d) if med_d is not None else 0.0
+        med_u_v = float(med_u) if med_u is not None else 0.0
+        # Compact median digits only (green M already marks it); instant rate tracks curve.
+        med_d_s, _u = _split_rate(med_d_v)
+        med_u_s, _u2 = _split_rate(med_u_v)
+        med_d_col = DIM if (med_d_v <= 0 or _rate_is_negligible(med_d_v)) else GRAPH_DOWN
+        med_u_col = DIM if (med_u_v <= 0 or _rate_is_negligible(med_u_v)) else GRAPH_UP
         m_badge_w = max(1, pf.text_ink_width("M", size="tiny")) + 2
         x = _draw_sum_inv_lab(img, d, x0, y, "DWN", GRAPH_DOWN)
-        # M glued to DWN; ≥1px between M badge and median value.
         x = _draw_sum_median_badge(img, d, x, y)
         x += 1
-        _draw_rate(img, x, y, d_val, color=down_col)
+        x = _txt(img, x, y, med_d_s, med_d_col, size="tiny", role="status")
+        x += 1
+        _draw_rate(img, x, y, down, color=down_col)
         up_badge_w = max(1, pf.text_ink_width("UP", size="tiny")) + 2
+        max_med_w = pf.text_width("999", size="tiny")
         max_up_rate_w = (
             pf.text_width("999", size="tiny") + 1 + pf.text_ink_width("M", size="tiny")
         )
-        # UP|M glued; ≥1px before value (flush-right when it fits).
-        up_x = x1 - (up_badge_w + m_badge_w + 1 + max_up_rate_w) + 1
-        ux = _draw_sum_inv_lab(img, d, up_x, y, "UP", GRAPH_UP)
+        up_x = x1 - (up_badge_w + m_badge_w + 1 + max_med_w + 1 + max_up_rate_w) + 1
+        ux = _draw_sum_inv_lab(img, d, max(0, up_x), y, "UP", GRAPH_UP)
         ux = _draw_sum_median_badge(img, d, ux, y)
-        u_ink = _rate_ink_width(u_val, unit_gap=0)
+        ux += 1
+        ux = _txt(img, ux, y, med_u_s, med_u_col, size="tiny", role="status")
+        u_ink = _rate_ink_width(up, unit_gap=0)
         _draw_rate(
             img,
             max(ux + 1, x1 - u_ink + 1),
             y,
-            u_val,
+            up,
             color=up_col,
             unit_gap=0,
         )
     else:
-        down_col = DIM if (down <= 0 or _rate_is_negligible(down)) else GRAPH_DOWN
-        up_col = DIM if (up <= 0 or _rate_is_negligible(up)) else GRAPH_UP
         tr_dn = _trend_from_history(m.get("wan_history_down"), eps_abs=0.05)
         tr_up = _trend_from_history(m.get("wan_history_up"), eps_abs=0.02)
         x = _draw_sum_inv_lab(img, d, x0, y, "DWN", GRAPH_DOWN)
@@ -2320,12 +2382,24 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
             _wlc_graph_panel(img, d, 1, 18, 62, 44, down, up, GRAPH_DOWN, GRAPH_UP, fill_down=True, scale_key="grp")
 
     elif sid == "WLC":
+        wd, wu, ld, lu = _corrected_wifi_lan_rates(m)
         w_down = list(m.get("wifi_history_down") or [])
         w_up = list(m.get("wifi_history_up") or [])
         eth_down = list(m.get("lan_history_down") or [])
         eth_up = list(m.get("lan_history_up") or [])
-        wd = float(m.get("wifi_down", 0) or 0)
-        wu = float(m.get("wifi_up", 0) or 0)
+        # Patch latest sample so CTF-corrected rates show on the live edge.
+        if w_down:
+            w_down = list(w_down)
+            w_down[-1] = wd
+        if w_up:
+            w_up = list(w_up)
+            w_up[-1] = wu
+        if eth_down:
+            eth_down = list(eth_down)
+            eth_down[-1] = ld
+        if eth_up:
+            eth_up = list(eth_up)
+            eth_up[-1] = lu
         _txt(img, 2, 11, "WiFi", WIFI, size="tiny", role="label")
         x = _draw_rate(
             img,
@@ -2346,8 +2420,6 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
             img, d, 1, 18, 62, 17, w_down, w_up, WIFI, GRAPH_UP, fill_down=True, scale_key="wlc_wifi"
         )
         _txt(img, 2, 38, "Eth", LAN, size="tiny", role="label")
-        ld = float(m.get("lan_down", 0) or 0)
-        lu = float(m.get("lan_up", 0) or 0)
         x = _draw_rate(
             img,
             18,

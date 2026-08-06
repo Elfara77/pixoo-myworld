@@ -640,21 +640,26 @@ def _reconcile_wifi_lan_rates(
 
     With Broadcom CTF, radio ``eth*`` counters often stay near 0 while
     ``wl sta_info`` and a LAN port (eth3/eth4) both show the STA download.
-    Move the STA surplus from ``lan_*`` back to ``wifi_*``.
+    Always promote STA totals into ``wifi_*`` and remove that surplus from
+    ``lan_*`` (balance gauges + Hot share these rates).
     """
     wd, wu = float(wifi_down or 0), float(wifi_up or 0)
     ld, lu = float(lan_down or 0), float(lan_up or 0)
     sd, su = max(0.0, float(sta_down or 0)), max(0.0, float(sta_up or 0))
-    phantom_d = max(0.0, sd - wd)
-    phantom_u = max(0.0, su - wu)
-    # Need a clear STA signal — avoids tiny jitter moving buckets.
-    if phantom_d >= 5.0 or phantom_u >= 2.0:
-        wd += phantom_d
-        wu += phantom_u
-        ld = max(0.0, ld - phantom_d)
-        lu = max(0.0, lu - phantom_u)
-    # Keep wifi from wildly exceeding WAN (clock skew / sampling).
+
+    if sd > wd:
+        ld = max(0.0, ld - (sd - wd))
+        wd = sd
+    if su > wu:
+        lu = max(0.0, lu - (su - wu))
+        wu = su
+
+    # When wifi+lan still overshoot WAN, trim LAN (shared CTF double-count).
     wan_d, wan_u = float(wan_down or 0), float(wan_up or 0)
+    if wan_d > 1.0 and wd + ld > wan_d * 1.15:
+        ld = max(0.0, wan_d - wd)
+    if wan_u > 0.5 and wu + lu > wan_u * 1.15:
+        lu = max(0.0, wan_u - wu)
     if wan_d > 1.0:
         wd = min(wd, wan_d * 1.2 + 5.0)
     if wan_u > 0.5:
@@ -781,6 +786,8 @@ def collect() -> dict:
         "wifi_up": round(wifi_up, 2),
         "lan_down": round(lan_down, 2),
         "lan_up": round(lan_up, 2),
+        "sta_down": round(sta_down, 2),
+        "sta_up": round(sta_up, 2),
         "wifi_history_down": list(_hist_wifi_down),
         "wifi_history_up": list(_hist_wifi_up),
         "lan_history_down": list(_hist_lan_down),
