@@ -253,24 +253,20 @@ def _txt(
 
 
 def _split_rate(mbps: float) -> tuple[str, str]:
-    """Return (number, unit) for emphasis."""
+    """Return (number, unit) for emphasis. Short style is integer-only (no '.')."""
     v = float(mbps or 0)
     if _RATE_STYLE == "long":
         if v >= 1000:
-            return f"{v / 1000:.1f}", "Gb/s"
-        if v >= 100:
-            return f"{v:.0f}", "Mb/s"
+            return f"{int(round(v / 1000))}", "Gb/s"
         if v >= 1:
-            return f"{v:.1f}", "Mb/s"
-        return f"{v * 1000:.0f}", "Kb/s"
+            return f"{int(round(v))}", "Mb/s"
+        return f"{int(round(v * 1000))}", "Kb/s"
     if v >= 1000:
-        return f"{v / 1000:.1f}", "G"
-    if v >= 100:
-        return f"{v:.0f}", "M"
+        return f"{int(round(v / 1000))}", "G"
     if v >= 1:
-        return f"{v:.1f}", "M"
+        return f"{int(round(v))}", "M"
     if v >= 0.001:
-        return f"{v * 1000:.0f}", "K"
+        return f"{int(round(v * 1000))}", "K"
     return "0", "K"
 
 
@@ -970,8 +966,12 @@ def _trend_from_history(
     *,
     eps_abs: float = 0.05,
     eps_ratio: float = 0.05,
+    allow_equal: bool = True,
 ) -> str:
-    """Compare last two history samples → ↑ / ↓ / = / empty if unknown."""
+    """Compare last two history samples → ↑ / ↓ / = / empty if unknown.
+
+    Uses raw floats (decimals OK). Pass allow_equal=False to hide stable '='.
+    """
     try:
         vals = [float(x) for x in (hist or [])]
     except (TypeError, ValueError):
@@ -984,14 +984,15 @@ def _trend_from_history(
         return "↑"
     if cur < prev - thr:
         return "↓"
-    return "="
+    return "=" if allow_equal else ""
 
 
 def _trend_color(mark: str) -> tuple[int, int, int]:
+    """↑ red (rise), ↓ blue (fall) — not green / not label gray."""
     if mark == "↑":
-        return GREEN
+        return RED
     if mark == "↓":
-        return ORANGE
+        return GRAPH_DOWN
     if mark == "=":
         return DIM
     return LABEL
@@ -1026,73 +1027,45 @@ def _wan_history_peaks(m: dict[str, Any]) -> tuple[float, float]:
 
 
 def _peak_rate_token(mbps: float) -> tuple[str, str]:
-    """Compact peak number + unit (prefer integers: 2M not 2.0M)."""
+    """Integer Mbps token for footer peaks (M only; no K, no '.')."""
     v = float(mbps or 0)
     if v >= 1000:
-        g = v / 1000.0
-        return (f"{g:.0f}" if abs(g - round(g)) < 0.05 else f"{g:.1f}"), "G"
-    if v >= 100:
-        return f"{v:.0f}", "M"
+        return f"{int(round(v / 1000))}", "G"
     if v >= 1:
-        if abs(v - round(v)) < 0.05:
-            return f"{int(round(v))}", "M"
-        return f"{v:.1f}", "M"
-    if v >= 0.001:
-        return f"{v * 1000:.0f}", "K"
-    return "0", "K"
+        return f"{int(round(v))}", "M"
+    return "0", "M"
 
 
 def _footer_peak_parts(
     peak_d: float, peak_u: float, *, max_chars: int = 6
 ) -> list[tuple[str, str]]:
-    """SUM footer peaks (no K): ``120M12``, ``120M/``, ``/M/``, ``?M12``.
-
-    Each item is ``(text, role)`` with role ``fg`` or ``dim`` (gray idle / ``?``).
-    """
+    """Footer peaks in M only: ``120M12``, ``120M?``, ``?M12``, ``?M?``."""
     d_ok = float(peak_d or 0) >= 1.0
     u_ok = float(peak_u or 0) >= 1.0
+
+    def _num_m(mbps: float) -> str:
+        n, _u = _peak_rate_token(mbps)
+        return n
+
     if not d_ok and not u_ok:
-        return [("/M/", "dim")]
+        return [("?M?", "dim")]
 
-    def _num(mbps: float) -> tuple[str, str]:
-        n, u = _peak_rate_token(mbps)
-        if "." in n:
-            n = n.split(".", 1)[0] or "0"
-        if u == "K":
-            return "0", "M"
-        return n, u
-
-    if d_ok and u_ok:
-        dn, du = _num(peak_d)
-        un, uu = _num(peak_u)
-        unit = du if du == uu else du
-        while True:
-            s = f"{dn}{unit}{un}"
-            if len(s) <= max_chars:
-                return [(s, "fg")]
-            if len(un) > 1:
-                un = un[:-1]
-                continue
-            if len(dn) > 1:
-                dn = dn[:-1]
-                continue
-            return [(s[:max_chars], "fg")]
-
-    if d_ok:
-        dn, du = _num(peak_d)
-        s = f"{dn}{du}/"
-        while len(s) > max_chars and len(dn) > 1:
+    dn = _num_m(peak_d) if d_ok else "?"
+    un = _num_m(peak_u) if u_ok else "?"
+    # Always shared M: down M up
+    while True:
+        s = f"{dn}M{un}"
+        if len(s) <= max_chars:
+            role = "dim" if (dn == "?" and un == "?") else "fg"
+            # Draw ? fragments dim when mixed — single string uses fg unless all ?
+            return [(s, "dim" if dn == "?" and un == "?" else "fg")]
+        if d_ok and len(dn) > 1:
             dn = dn[:-1]
-            s = f"{dn}{du}/"
+            continue
+        if u_ok and len(un) > 1:
+            un = un[:-1]
+            continue
         return [(s[:max_chars], "fg")]
-
-    # up ≥ 1M, down < 1M → gray ? + M12
-    un, uu = _num(peak_u)
-    body = f"{uu}{un}"
-    while len(body) + 1 > max_chars and len(un) > 1:
-        un = un[:-1]
-        body = f"{uu}{un}"
-    return [("?", "dim"), (body[: max(0, max_chars - 1)], "fg")]
 
 
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
@@ -1104,13 +1077,22 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
 
     # Full width — no side gutter (pixels 0 and 63 used).
     x0, x1 = 0, 63
-    # Shared columns: 3-letter label + 1px + gauge; right gauge ends on x1.
+    # Shared columns. Right labels (NET/RAM/TMP) share one X so they line up.
+    # Reserve: LABEL + trend slot + gap + max "100°C" (NET has no arrow but keeps the slot).
     lab_w = pf.text_width("SYS", size="tiny")
     lab_l = x0
+    trend_w = pf.text_width("↑", size="tiny")
+    tmp_val_max = (
+        pf.text_width("100", size="tiny") + 1 + pf.text_ink_width("°C", size="tiny")
+    )
+    lab_r = x1 - (lab_w + trend_w + 2 + tmp_val_max) + 1
     g_l = lab_l + lab_w + 1
-    g_w = 16
-    g_r = x1 - g_w + 1
-    lab_r = g_r - 1 - lab_w
+    # Left gauge ends just before right label column.
+    g_w_l = max(4, lab_r - g_l - 1)
+    # Right gauges / TMP value share one content X (after label + trend slot).
+    content_r = lab_r + lab_w + trend_w
+    g_r = content_r
+    g_w_r = max(4, x1 - g_r + 1)
     step = 6  # 5px tiny glyph + 1px row gap
     y = 0
 
@@ -1118,38 +1100,33 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         # Flush last ink to x1 (tiny advance width leaves a dead trailing px).
         return x1 - pf.text_ink_width(text, size="tiny") + 1
 
-    # 1) DWN … | UP … — trend vs previous wan_history sample
+    # 1) DWN↑ rate | UP↑ rate — trend glued to label
     down = float(m.get("wan_down", 0) or 0)
     up = float(m.get("wan_up", 0) or 0)
     down_col = _wan_link_color(down, _WAN_MAX_DOWN_MBPS)
     up_col = _wan_link_color(up, _WAN_MAX_UP_MBPS)
     tr_dn = _trend_from_history(m.get("wan_history_down"), eps_abs=0.05)
     tr_up = _trend_from_history(m.get("wan_history_up"), eps_abs=0.02)
-    _txt(img, x0, y, "DWN", LABEL, size="tiny", role="label")
-    x = x0 + pf.text_width("DWN", size="tiny") + 1
-    x = _draw_trend(img, x, y, tr_dn)
-    if tr_dn:
-        x += 1
+    x = _txt(img, x0, y, "DWN", LABEL, size="tiny", role="label")
+    x = _draw_trend(img, x, y, tr_dn)  # glued to label
+    x += 1
     _draw_rate(img, x, y, down, color=down_col)
     up_rate_w = _rate_ink_width(up)
-    tr_up_w = pf.text_ink_width(tr_up, size="tiny") if tr_up else 0
+    tr_up_w = pf.text_width(tr_up, size="tiny") if tr_up else 0
     up_lab_w = pf.text_width("UP", size="tiny")
-    gap = 1
-    block = up_lab_w + gap + (tr_up_w + gap if tr_up else 0) + up_rate_w
+    block = up_lab_w + tr_up_w + 1 + up_rate_w
     ux = x1 - block + 1
     ux = _txt(img, ux, y, "UP", LABEL, size="tiny", role="label")
-    ux += gap
-    if tr_up:
-        ux = _draw_trend(img, ux, y, tr_up)
-        ux += gap
+    ux = _draw_trend(img, ux, y, tr_up)
+    ux += 1
     _draw_rate(img, ux, y, up, color=up_col)
     y += step
 
-    # 2) SYS [gauge] NET [gauge]
+    # 2) SYS [gauge] NET [gauge] — NET label at same X as RAM/TMP
     _txt(img, lab_l, y, "SYS", LABEL, size="tiny", role="label")
-    _gauge(d, g_l, y, g_w, sys_hp, sys_col, alert=False)
+    _gauge(d, g_l, y, g_w_l, sys_hp, sys_col, alert=False)
     _txt(img, lab_r, y, "NET", LABEL, size="tiny", role="label")
-    _gauge(d, g_r, y, g_w, net_sat, net_col, alert=False)
+    _gauge(d, g_r, y, g_w_r, net_sat, net_col, alert=False)
     y += step
 
     cpu = float(m.get("cpu", 0) or 0)
@@ -1157,31 +1134,44 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
     disk = _disk_used_pct(m)
 
-    # 3) CPU [gauge] RAM [gauge] — trend steals space from gauge after label
+    # 3) CPU↑ [gauge] RAM↓ [gauge] — arrows glued to labels (no '=')
     cpu_col = _diagram_color(cpu, kind="load")
     ram_col = _diagram_color(ram, kind="load")
     cpu_alert = _is_crit_load(cpu)
     ram_alert = _is_crit_load(ram)
-    tr_cpu = _trend_from_history(m.get("cpu_history"), eps_abs=1.0, eps_ratio=0.02)
-    tr_ram = _trend_from_history(m.get("ram_history"), eps_abs=1.0, eps_ratio=0.02)
+    tr_cpu = _trend_from_history(
+        m.get("cpu_history"), eps_abs=1.0, eps_ratio=0.02, allow_equal=False
+    )
+    tr_ram = _trend_from_history(
+        m.get("ram_history"), eps_abs=1.0, eps_ratio=0.02, allow_equal=False
+    )
 
-    def _gauge_with_trend(g_x: int, mark: str, pct: float, col, *, alert: bool) -> None:
-        gx, gw = g_x, g_w
-        if mark:
-            _draw_trend(img, g_x, y, mark)
-            gx = g_x + pf.text_width(mark, size="tiny")
-            gw = max(4, g_w - (gx - g_x))
+    def _label_trend_gauge(
+        lab_x: int,
+        lab: str,
+        mark: str,
+        pct: float,
+        col,
+        *,
+        alert: bool,
+        g_x0: int,
+        g_w0: int,
+    ) -> None:
+        lx = _txt(img, lab_x, y, lab, LABEL, size="tiny", role="label", alert=alert)
+        lx = _draw_trend(img, lx, y, mark)
+        # Gauge keeps the column slot; shrink from the left if arrow ate into it.
+        slot_end = g_x0 + g_w0
+        gx = max(g_x0, lx)
+        gw = max(4, slot_end - gx)
         _gauge(d, gx, y, gw, pct, col, alert=alert)
 
-    _txt(img, lab_l, y, "CPU", LABEL, size="tiny", role="label", alert=cpu_alert)
-    _gauge_with_trend(g_l, tr_cpu, cpu, cpu_col, alert=cpu_alert)
-    _txt(img, lab_r, y, "RAM", LABEL, size="tiny", role="label", alert=ram_alert)
-    _gauge_with_trend(g_r, tr_ram, ram, ram_col, alert=ram_alert)
+    _label_trend_gauge(lab_l, "CPU", tr_cpu, cpu, cpu_col, alert=cpu_alert, g_x0=g_l, g_w0=g_w_l)
+    _label_trend_gauge(lab_r, "RAM", tr_ram, ram, ram_col, alert=ram_alert, g_x0=g_r, g_w0=g_w_r)
     y += step
 
-    # 4) DSK % …… TMP °C
+    # 4) DSK % …… TMP↑ °C — TMP label at same lab_r as NET/RAM
     dsk_col = _diagram_color(disk, kind="disk")
-    tmp_i = int(tmp)
+    tmp_i = int(round(tmp))
     tmp_hot = _is_crit_temp_tile(tmp_i)
     tmp_col = RED if tmp_hot else _temp_tile_color(tmp_i)
     _txt(img, lab_l, y, "DSK", LABEL, size="tiny", role="label", alert=_is_crit_disk_tile(disk))
@@ -1189,33 +1179,27 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         img,
         lab_l + lab_w + 2,
         y,
-        str(int(disk)),
+        str(int(round(disk))),
         "%",
         dsk_col,
         size="tiny",
         value_role="status",
         alert=_is_crit_disk_tile(disk),
     )
-    # TMP … °C flush-right, optional trend before value
     tr_tmp = _trend_from_history(m.get("temp_history"), eps_abs=0.5, eps_ratio=0.01)
     tmp_num = str(tmp_i)
-    tmp_val_w = pf.text_width(tmp_num, size="tiny") + 1 + pf.text_ink_width("°C", size="tiny")
-    tr_w = pf.text_width(tr_tmp, size="tiny") if tr_tmp else 0
-    right_w = tmp_val_w + ((1 + tr_w) if tr_tmp else 0)
-    bx = x1 - right_w + 1
-    lab_x = bx - lab_w - 2
-    _txt(
+    bx = _txt(
         img,
-        lab_x,
+        lab_r,
         y,
         "TMP",
         RED if tmp_hot else LABEL,
         size="tiny",
         role="status" if tmp_hot else "label",
     )
-    if tr_tmp:
-        bx = _draw_trend(img, bx, y, tr_tmp)
-        bx += 1
+    bx = _draw_trend(img, bx, y, tr_tmp)
+    bx = max(bx, content_r)  # keep value column aligned with NET/RAM gauges
+    bx += 2
     _draw_val_unit(img, bx, y, tmp_num, "°C", tmp_col, size="tiny", value_role="status")
     y += step
 
@@ -1304,7 +1288,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         _draw_rate_right(img, x1, y, rate, color=rate_col)
         y += step
 
-    # 9) Footer: uptime|WAN · G{2g}|{5g} · [trend] peaks
+    # 9) Footer: uptime|WAN · W{5g}{2g} · peaks M-only (120M12 / ?M?)
     if y > 58:
         return
     online = bool(m.get("wan_online"))
@@ -1312,24 +1296,21 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     c2 = min(99, int(m.get("clients_2g", 0) or 0))
     c5 = min(99, int(m.get("clients_5g", 0) or 0))
     peak_d, peak_u = _wan_history_peaks(m)
-    bands = f"G{c2}|{c5}"
-    left_w = pf.text_width(head, size="tiny") + pf.text_width(bands, size="tiny")
-    tr_pk = _trend_from_history(m.get("wan_history_down"), eps_abs=0.05)
-    tr_adv = pf.text_width(tr_pk, size="tiny") if tr_pk else 0
+    # W + 5GHz (green) + 2.4GHz (yellow), e.g. W1213
+    s5, s2 = str(c5), str(c2)
+    bands_w = pf.text_width("W", size="tiny") + pf.text_width(s5, size="tiny") + pf.text_width(
+        s2, size="tiny"
+    )
+    left_w = pf.text_width(head, size="tiny") + bands_w
 
-    # Shrink peak budget until left + optional trend + peaks fit.
-    parts: list[tuple[str, str]] = [("/M/", "dim")]
+    parts: list[tuple[str, str]] = [("?M?", "dim")]
     pk_x = x1
-    tr_x: int | None = None
     for max_pk in (6, 5, 4, 3):
         cand = _footer_peak_parts(peak_d, peak_u, max_chars=max_pk)
         joined = "".join(t for t, _r in cand if t)
-        peak_ink = pf.text_ink_width(joined, size="tiny")
-        px_peak = x1 - peak_ink + 1
-        px_tr = px_peak - tr_adv if tr_pk else px_peak
-        if px_tr >= left_w - 1:
-            parts, pk_x = cand, px_peak
-            tr_x = px_tr if tr_pk else None
+        px = x1 - pf.text_ink_width(joined, size="tiny") + 1
+        if px >= left_w - 1:
+            parts, pk_x = cand, px
             break
 
     x = x0
@@ -1338,21 +1319,17 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     else:
         x = _txt(img, x, y, head, RED, size="tiny", role="status", alert=True)
 
-    # G13|4 — G and | in label color, counts green
-    if x + pf.text_width(bands, size="tiny") - 1 < pk_x - tr_adv:
-        x = _txt(img, x, y, "G", LABEL, size="tiny", role="label")
-        x = _txt(img, x, y, str(c2), GREEN, size="tiny", role="status")
-        x = _txt(img, x, y, "|", LABEL, size="tiny", role="label")
-        x = _txt(img, x, y, str(c5), GREEN, size="tiny", role="status")
+    if x + bands_w - 1 < pk_x:
+        x = _txt(img, x, y, "W", LABEL, size="tiny", role="label")
+        x = _txt(img, x, y, s5, GREEN, size="tiny", role="status")  # 5 GHz
+        x = _txt(img, x, y, s2, YELLOW, size="tiny", role="status")  # 2.4 GHz
 
-    if tr_pk and tr_x is not None:
-        _draw_trend(img, tr_x, y, tr_pk)
-
-    # Peaks flush-right (multi-color fragments)
+    # Peaks flush-right — color '?' dim inside the string
     px = pk_x
     for text, role in parts:
-        col = DIM if role == "dim" else FG
-        px = _txt(img, px, y, text, col, size="tiny", role="status")
+        for ch in text:
+            col = DIM if ch == "?" or role == "dim" else FG
+            px = _txt(img, px, y, ch, col, size="tiny", role="status")
 
 
 def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
