@@ -87,6 +87,9 @@ _NET_SIGNIF_UTIL = 0.05
 _NET_SMOOTH_PREV = 0.6
 _NET_SMOOTH_RAW = 0.4
 _NET_SAT_SMOOTH: float | None = None
+# Short histories for SUM SYS/NET gauge trend arrows (last samples).
+_SYS_HP_HIST: list[float] = []
+_NET_SAT_HIST: list[float] = []
 
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
 HEAVY_SCREEN_IDS = frozenset({"LOD", "GRP", "WLC", "TOP", "CLI", "TMP", "SUM"})
@@ -988,11 +991,11 @@ def _trend_from_history(
 
 
 def _trend_color(mark: str) -> tuple[int, int, int]:
-    """↑ red (rise), ↓ blue (fall) — not green / not label gray."""
+    """↑ red (rise), ↓ green (fall)."""
     if mark == "↑":
         return RED
     if mark == "↓":
-        return GRAPH_DOWN
+        return GREEN
     if mark == "=":
         return DIM
     return LABEL
@@ -1005,80 +1008,49 @@ def _draw_trend(img, x: int, y: int, mark: str) -> int:
     return _txt(img, x, y, mark, _trend_color(mark), size="tiny", role="status")
 
 
-def _wan_history_peaks(m: dict[str, Any]) -> tuple[float, float]:
-    """Peak WAN down/up (Mbps) from history max fields or series."""
-    def _peak(key_max: str, key_hist: str, key_cur: str) -> float:
-        v = float(m.get(key_max) or 0)
-        if v > 0:
-            return v
-        hist = m.get(key_hist) or []
-        try:
-            vals = [float(x) for x in hist]
-        except (TypeError, ValueError):
-            vals = []
-        if vals:
-            return float(max(vals))
-        return float(m.get(key_cur) or 0)
-
-    return (
-        _peak("wan_history_max_down", "wan_history_down", "wan_down"),
-        _peak("wan_history_max_up", "wan_history_up", "wan_up"),
-    )
+def _score_hist_push(buf: list[float], val: float, *, keep: int = 4) -> None:
+    buf.append(float(val))
+    del buf[:-keep]
 
 
-def _peak_rate_token(mbps: float) -> tuple[str, str]:
-    """Integer Mbps token for footer peaks (M only; no K, no '.')."""
-    v = float(mbps or 0)
-    if v >= 1000:
-        return f"{int(round(v / 1000))}", "G"
-    if v >= 1:
-        return f"{int(round(v))}", "M"
-    return "0", "M"
-
-
-def _footer_peak_parts(
-    peak_d: float, peak_u: float, *, max_chars: int = 6
-) -> list[tuple[str, str]]:
-    """Footer peaks in M only: ``120M12``, ``120M?``, ``?M12``, ``?M?``."""
-    d_ok = float(peak_d or 0) >= 1.0
-    u_ok = float(peak_u or 0) >= 1.0
-
-    def _num_m(mbps: float) -> str:
-        n, _u = _peak_rate_token(mbps)
-        return n
-
-    if not d_ok and not u_ok:
-        return [("?M?", "dim")]
-
-    dn = _num_m(peak_d) if d_ok else "?"
-    un = _num_m(peak_u) if u_ok else "?"
-    # Always shared M: down M up
-    while True:
-        s = f"{dn}M{un}"
-        if len(s) <= max_chars:
-            role = "dim" if (dn == "?" and un == "?") else "fg"
-            # Draw ? fragments dim when mixed — single string uses fg unless all ?
-            return [(s, "dim" if dn == "?" and un == "?" else "fg")]
-        if d_ok and len(dn) > 1:
-            dn = dn[:-1]
-            continue
-        if u_ok and len(un) > 1:
-            un = un[:-1]
-            continue
-        return [(s[:max_chars], "fg")]
+def _draw_inverted_chip(
+    img,
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    text: str,
+    accent: tuple[int, int, int],
+    *,
+    h: int = 5,
+    pad: int = 1,
+) -> int:
+    """Black text on accent fill/outline (padded chip); returns x after chip."""
+    if not text:
+        return x
+    ink = max(1, pf.text_ink_width(text, size="tiny"))
+    adv = pf.text_width(text, size="tiny")
+    x0 = max(0, x - pad)
+    x1 = min(63, x + ink - 1 + pad)
+    y1 = min(63, y + h - 1)
+    draw.rectangle([x0, y, x1, y1], fill=accent, outline=accent)
+    # Pure black so strokes stay distinct from screen BG holes outside the chip.
+    pf.draw_tiny(img, x, y, text, (0, 0, 0))
+    return x + adv
 
 
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """Full-bleed summary: DWN first; 2 top hosts; footer uptime/WAN + 2G/5G + peaks."""
+    """Full-bleed summary: DWN first; 2 top hosts; footer time/uptime/date inverted."""
     sys_hp = _system_health_score(m)
     net_sat = _network_saturation(m)
     sys_col = _sys_health_color(sys_hp)
     net_col = _net_sat_color(net_sat)
+    _score_hist_push(_SYS_HP_HIST, sys_hp)
+    _score_hist_push(_NET_SAT_HIST, net_sat)
 
     # Full width — no side gutter (pixels 0 and 63 used).
     x0, x1 = 0, 63
     # Shared columns. Right labels (NET/RAM/TMP) share one X so they line up.
-    # Reserve: LABEL + trend slot + gap + max "100°C" (NET has no arrow but keeps the slot).
+    # Reserve: LABEL + trend slot + gap + max "100°C" (empty slot when no arrow).
     lab_w = pf.text_width("SYS", size="tiny")
     lab_l = x0
     trend_w = pf.text_width("↑", size="tiny")
@@ -1086,11 +1058,11 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         pf.text_width("100", size="tiny") + 1 + pf.text_ink_width("°C", size="tiny")
     )
     lab_r = x1 - (lab_w + trend_w + 2 + tmp_val_max) + 1
-    g_l = lab_l + lab_w + 1
-    # Left gauge ends just before right label column.
-    g_w_l = max(4, lab_r - g_l - 1)
-    # Right gauges / TMP value share one content X (after label + trend slot).
+    # Gauges start after label + reserved trend slot (SYS/NET/CPU/RAM).
+    content_l = lab_l + lab_w + trend_w
     content_r = lab_r + lab_w + trend_w
+    g_l = content_l
+    g_w_l = max(4, lab_r - g_l - 1)
     g_r = content_r
     g_w_r = max(4, x1 - g_r + 1)
     step = 6  # 5px tiny glyph + 1px row gap
@@ -1122,28 +1094,12 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _draw_rate(img, ux, y, up, color=up_col)
     y += step
 
-    # 2) SYS [gauge] NET [gauge] — NET label at same X as RAM/TMP
-    _txt(img, lab_l, y, "SYS", LABEL, size="tiny", role="label")
-    _gauge(d, g_l, y, g_w_l, sys_hp, sys_col, alert=False)
-    _txt(img, lab_r, y, "NET", LABEL, size="tiny", role="label")
-    _gauge(d, g_r, y, g_w_r, net_sat, net_col, alert=False)
-    y += step
-
-    cpu = float(m.get("cpu", 0) or 0)
-    ram = float(m.get("ram", 0) or 0)
-    tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
-    disk = _disk_used_pct(m)
-
-    # 3) CPU↑ [gauge] RAM↓ [gauge] — arrows glued to labels (no '=')
-    cpu_col = _diagram_color(cpu, kind="load")
-    ram_col = _diagram_color(ram, kind="load")
-    cpu_alert = _is_crit_load(cpu)
-    ram_alert = _is_crit_load(ram)
-    tr_cpu = _trend_from_history(
-        m.get("cpu_history"), eps_abs=1.0, eps_ratio=0.02, allow_equal=False
+    # 2–3) SYS/NET + CPU/RAM — trend arrow in slot before each gauge
+    tr_sys = _trend_from_history(
+        _SYS_HP_HIST, eps_abs=1.0, eps_ratio=0.02, allow_equal=False
     )
-    tr_ram = _trend_from_history(
-        m.get("ram_history"), eps_abs=1.0, eps_ratio=0.02, allow_equal=False
+    tr_net = _trend_from_history(
+        _NET_SAT_HIST, eps_abs=1.0, eps_ratio=0.02, allow_equal=False
     )
 
     def _label_trend_gauge(
@@ -1157,14 +1113,30 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         g_x0: int,
         g_w0: int,
     ) -> None:
-        lx = _txt(img, lab_x, y, lab, LABEL, size="tiny", role="label", alert=alert)
-        lx = _draw_trend(img, lx, y, mark)
-        # Gauge keeps the column slot; shrink from the left if arrow ate into it.
-        slot_end = g_x0 + g_w0
-        gx = max(g_x0, lx)
-        gw = max(4, slot_end - gx)
-        _gauge(d, gx, y, gw, pct, col, alert=alert)
+        _txt(img, lab_x, y, lab, LABEL, size="tiny", role="label", alert=alert)
+        if mark:
+            _draw_trend(img, lab_x + lab_w, y, mark)
+        _gauge(d, g_x0, y, g_w0, pct, col, alert=alert)
 
+    _label_trend_gauge(lab_l, "SYS", tr_sys, sys_hp, sys_col, alert=False, g_x0=g_l, g_w0=g_w_l)
+    _label_trend_gauge(lab_r, "NET", tr_net, net_sat, net_col, alert=False, g_x0=g_r, g_w0=g_w_r)
+    y += step
+
+    cpu = float(m.get("cpu", 0) or 0)
+    ram = float(m.get("ram", 0) or 0)
+    tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
+    disk = _disk_used_pct(m)
+
+    cpu_col = _diagram_color(cpu, kind="load")
+    ram_col = _diagram_color(ram, kind="load")
+    cpu_alert = _is_crit_load(cpu)
+    ram_alert = _is_crit_load(ram)
+    tr_cpu = _trend_from_history(
+        m.get("cpu_history"), eps_abs=1.0, eps_ratio=0.02, allow_equal=False
+    )
+    tr_ram = _trend_from_history(
+        m.get("ram_history"), eps_abs=1.0, eps_ratio=0.02, allow_equal=False
+    )
     _label_trend_gauge(lab_l, "CPU", tr_cpu, cpu, cpu_col, alert=cpu_alert, g_x0=g_l, g_w0=g_w_l)
     _label_trend_gauge(lab_r, "RAM", tr_ram, ram, ram_col, alert=ram_alert, g_x0=g_r, g_w0=g_w_r)
     y += step
@@ -1288,48 +1260,43 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         _draw_rate_right(img, x1, y, rate, color=rate_col)
         y += step
 
-    # 9) Footer: uptime|WAN · W{5g}{2g} · peaks M-only (120M12 / ?M?)
+    # 9) Footer: inverted chips — time (white) · uptime(green)|WAN(red blink) · date (white, right)
     if y > 58:
         return
+    from datetime import datetime
+
+    now = datetime.now()
+    time_s = now.strftime("%H:%M")
+    date_s = now.strftime("%d/%m")
     online = bool(m.get("wan_online"))
-    head = ("WAN" if not online else str(m.get("uptime_str", "--") or "--"))[:8]
-    c2 = min(99, int(m.get("clients_2g", 0) or 0))
-    c5 = min(99, int(m.get("clients_5g", 0) or 0))
-    peak_d, peak_u = _wan_history_peaks(m)
-    # W + 5GHz (green) + 2.4GHz (yellow), e.g. W1213
-    s5, s2 = str(c5), str(c2)
-    bands_w = pf.text_width("W", size="tiny") + pf.text_width(s5, size="tiny") + pf.text_width(
-        s2, size="tiny"
-    )
-    left_w = pf.text_width(head, size="tiny") + bands_w
+    mid = "WAN" if not online else str(m.get("uptime_str", "--") or "--")
+    # Fit middle between time and right-aligned date (account for 1px chip pads + gaps).
+    pad = 1
+    gap = 1
+    time_ink = pf.text_ink_width(time_s, size="tiny")
+    date_ink = pf.text_ink_width(date_s, size="tiny")
+    date_x = x1 - date_ink + 1
+    # time chip occupies [0..time_ink+pad], then gap, then mid, then gap before date chip pad.
+    mid_x = time_ink + pad + gap + pad
+    mid_right = date_x - pad - gap
+    avail = max(0, mid_right - mid_x + 1)
+    while mid and pf.text_width(mid, size="tiny") > avail:
+        mid = mid[:-1]
 
-    parts: list[tuple[str, str]] = [("?M?", "dim")]
-    pk_x = x1
-    for max_pk in (6, 5, 4, 3):
-        cand = _footer_peak_parts(peak_d, peak_u, max_chars=max_pk)
-        joined = "".join(t for t, _r in cand if t)
-        px = x1 - pf.text_ink_width(joined, size="tiny") + 1
-        if px >= left_w - 1:
-            parts, pk_x = cand, px
-            break
-
-    x = x0
-    if online:
-        x = _txt(img, x, y, head, GREEN, size="tiny", role="status")
+    # Full-height footer band so black glyphs sit on solid accent (not screen BG).
+    band_h = max(5, 64 - y)
+    _draw_inverted_chip(img, d, x0 + pad, y, time_s, FG, h=band_h, pad=pad)
+    show_mid = bool(mid) and (online or not _ALERT_BLINK or _blink_on())
+    if show_mid:
+        _draw_inverted_chip(
+            img, d, mid_x, y, mid, GREEN if online else RED, h=band_h, pad=pad
+        )
     else:
-        x = _txt(img, x, y, head, RED, size="tiny", role="status", alert=True)
-
-    if x + bands_w - 1 < pk_x:
-        x = _txt(img, x, y, "W", LABEL, size="tiny", role="label")
-        x = _txt(img, x, y, s5, GREEN, size="tiny", role="status")  # 5 GHz
-        x = _txt(img, x, y, s2, YELLOW, size="tiny", role="status")  # 2.4 GHz
-
-    # Peaks flush-right — color '?' dim inside the string
-    px = pk_x
-    for text, role in parts:
-        for ch in text:
-            col = DIM if ch == "?" or role == "dim" else FG
-            px = _txt(img, px, y, ch, col, size="tiny", role="status")
+        # Keep the middle band colored even while WAN blink is off.
+        if mid and not online:
+            mx1 = min(63, mid_x + max(1, pf.text_ink_width(mid, size="tiny")) - 1 + pad)
+            d.rectangle([mid_x - pad, y, mx1, min(63, y + band_h - 1)], fill=RED, outline=RED)
+    _draw_inverted_chip(img, d, date_x, y, date_s, FG, h=band_h, pad=pad)
 
 
 def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
