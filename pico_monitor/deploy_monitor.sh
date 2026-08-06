@@ -71,6 +71,7 @@ ST_BRIDGE="?"
 ST_CRU="?"
 ST_METRICS="?"
 ST_PIXOO="?"
+ST_PIXOO_VIA=""
 ST_PICO="?"
 ST_DETAIL_PID=""
 ST_DETAIL_CRU=""
@@ -226,12 +227,37 @@ pico_ping_ok() {
 }
 
 pixoo_http_ok() {
+  # Prefer direct probe from this host; Pixoo is often on a guest/IoT VLAN
+  # unreachable from the laptop — fall back to probing via Merlin (where the
+  # bridge runs). Direct success ⇒ yes; Merlin-only ⇒ yes (via Merlin).
   if command -v curl >/dev/null 2>&1; then
-    curl -fsS --max-time 3 -X POST "http://${PIXOO_IP}/post" \
+    if curl -fsS --max-time 3 -X POST "http://${PIXOO_IP}/post" \
       -H 'Content-Type: application/json' \
-      -d '{"Command":"Device/GetDeviceTime"}' >/dev/null 2>&1
-    return $?
+      -d '{"Command":"Device/GetDeviceTime"}' >/dev/null 2>&1; then
+      ST_PIXOO_VIA=""
+      return 0
+    fi
   fi
+  # Bridge path: Merlin → Pixoo (authoritative for "can the push loop work?").
+  if remote "
+    if [ -x /opt/bin/curl ]; then
+      /opt/bin/curl -fsS --max-time 3 -X POST 'http://${PIXOO_IP}/post' \
+        -H 'Content-Type: application/json' \
+        -d '{\"Command\":\"Device/GetDeviceTime\"}' >/dev/null 2>&1
+    elif [ -x /usr/bin/curl ]; then
+      /usr/bin/curl -fsS --max-time 3 -X POST 'http://${PIXOO_IP}/post' \
+        -H 'Content-Type: application/json' \
+        -d '{\"Command\":\"Device/GetDeviceTime\"}' >/dev/null 2>&1
+    else
+      wget -qO- --timeout=3 --post-data='{\"Command\":\"Device/GetDeviceTime\"}' \
+        --header='Content-Type: application/json' \
+        'http://${PIXOO_IP}/post' >/dev/null 2>&1
+    fi
+  " 2>/dev/null; then
+    ST_PIXOO_VIA="merlin"
+    return 0
+  fi
+  ST_PIXOO_VIA=""
   return 1
 }
 
@@ -253,6 +279,7 @@ compute_status() {
   ST_CRU="?"
   ST_METRICS="?"
   ST_PIXOO="?"
+  ST_PIXOO_VIA=""
   ST_PICO="?"
   ST_DETAIL_PID=""
   ST_DETAIL_CRU=""
@@ -262,6 +289,7 @@ compute_status() {
     ST_PIXOO="yes"
   else
     ST_PIXOO="no"
+    ST_PIXOO_VIA=""
   fi
 
   if [[ -n "${PICO_HOST}" ]]; then
@@ -357,7 +385,12 @@ render_status_block() {
   printf '  Pixoo bridge %s  push loop on Merlin\n' "$(mark_yes_no "${ST_BRIDGE}")"
   printf '  Autostart    %s  cru/services-start\n' "$(mark_yes_no "${ST_CRU}")"
   printf '  Metrics HTTP %s  http://%s:%s/metrics.json\n' "$(mark_yes_no "${ST_METRICS}")" "${ROUTER_HOST}" "${METRICS_PORT}"
-  printf '  Pixoo API    %s  %s /post\n' "$(mark_yes_no "${ST_PIXOO}")" "${PIXOO_IP}"
+  if [[ "${ST_PIXOO}" == "yes" && "${ST_PIXOO_VIA}" == "merlin" ]]; then
+    printf '  Pixoo API    %s  %s /post (via Merlin; laptop VLAN blocked)\n' \
+      "$(mark_yes_no "${ST_PIXOO}")" "${PIXOO_IP}"
+  else
+    printf '  Pixoo API    %s  %s /post\n' "$(mark_yes_no "${ST_PIXOO}")" "${PIXOO_IP}"
+  fi
   if [[ -n "${PICO_HOST}" ]]; then
     printf '  Pico ping    %s  %s (optional OLED)\n' "$(mark_yes_no "${ST_PICO}")" "${PICO_HOST}"
   fi
@@ -380,11 +413,16 @@ ping_pico() {
 
 ping_pixoo() {
   echo "==> Pixoo API ${PIXOO_IP}"
+  ST_PIXOO_VIA=""
   if pixoo_http_ok; then
-    echo "Pixoo OK at ${PIXOO_IP} (Device/GetDeviceTime)"
+    if [[ "${ST_PIXOO_VIA}" == "merlin" ]]; then
+      echo "Pixoo OK at ${PIXOO_IP} (via Merlin SSH — laptop cannot reach guest/IoT VLAN)"
+    else
+      echo "Pixoo OK at ${PIXOO_IP} (Device/GetDeviceTime)"
+    fi
     return 0
   fi
-  echo "Pixoo NOT answering /post at ${PIXOO_IP}"
+  echo "Pixoo NOT answering /post at ${PIXOO_IP} (tried laptop + Merlin)"
   return 1
 }
 
@@ -1026,13 +1064,34 @@ autostart() {
 
 test_metrics() {
   echo "==> GET http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json"
+  # Rates need ≥1 previous sample (~2.5s). After a fresh start the first dump
+  # is all zeros / empty histories — wait then print a short live summary.
+  local raw summary
   if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 5 "http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json" >/dev/null 2>&1 || true
+    sleep 3
+    raw="$(curl -fsS --max-time 5 "http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json" || true)"
+    if [[ -z "${raw}" ]]; then
+      echo "metrics unreachable" >&2
+      return 1
+    fi
     if command -v python3 >/dev/null 2>&1; then
-      curl -fsS --max-time 5 "http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json" \
-        | python3 -m json.tool
+      summary="$(printf '%s' "${raw}" | python3 -c '
+import json,sys
+m=json.load(sys.stdin)
+hd=m.get("wan_history_down") or []
+print(
+  f"uptime={m.get(\"uptime_str\")} cpu={m.get(\"cpu\")} ram={m.get(\"ram\")} "
+  f"clients={m.get(\"clients\")} wan_down={m.get(\"wan_down\")} wan_up={m.get(\"wan_up\")} "
+  f"hist={len(hd)} top_down={m.get(\"top_down\")}"
+)' 2>/dev/null || true)"
+      echo "${summary}"
+      if [[ "${summary}" == *'hist=0'* ]] || [[ "${summary}" == *'hist=1 '* ]]; then
+        echo "(note: histories refill after restart — wait ~1 min for a full sparkline)"
+      fi
+      printf '%s\n' "${raw}" | python3 -m json.tool
     else
-      curl -fsS --max-time 5 "http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json"
-      echo
+      printf '%s\n' "${raw}"
     fi
   else
     remote "wget -qO- http://127.0.0.1:${METRICS_PORT}/metrics.json 2>/dev/null; echo"
@@ -1291,7 +1350,7 @@ auto_mode() {
 
   echo ""
   echo "[6/6] Verify metrics + Pixoo…"
-  sleep 2
+  sleep 3
   test_metrics || true
   ping_pixoo || true
 
@@ -1301,7 +1360,12 @@ auto_mode() {
   render_status_block
   echo ""
   if [[ "${ST_BRIDGE}" == "yes" ]] && [[ "${ST_METRICS}" == "yes" ]]; then
-    echo "OK — Pixoo bridge running on Merlin → ${PIXOO_IP} (6 screens)."
+    echo "OK — Pixoo bridge running on Merlin → ${PIXOO_IP}."
+    if [[ "${ST_PIXOO}" != "yes" ]]; then
+      echo "WARN — Pixoo /post unreachable from laptop AND Merlin; check PIXOO_IP / VLAN."
+    elif [[ "${ST_PIXOO_VIA}" == "merlin" ]]; then
+      echo "Note — Pixoo not reachable from this laptop (guest/IoT VLAN); bridge path OK."
+    fi
   else
     echo "WARN — check logs: ./deploy_monitor.sh logs"
     echo "  bridge=${ST_BRIDGE} metrics_http=${ST_METRICS} pixoo_api=${ST_PIXOO}"
