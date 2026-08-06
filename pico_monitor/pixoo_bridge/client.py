@@ -14,18 +14,18 @@ from PIL import Image
 class PixooClient:
     """Pushes 64×64 RGB frames via Draw/SendHttpGif.
 
-    Live-dashboard pattern (Divoom / community): every still is a *replace*, not
-    an animation frame. Always ``ResetHttpGifId`` then ``SendHttpGif`` with
-    ``PicID=1``, ``PicNum=1``, ``PicOffset=0``, low ``PicSpeed``.
+    Live stills: keep ``PicID=1`` / ``PicNum=1`` and *overwrite* the same slot.
+    Do **not** reset the GIF buffer every frame — ``ResetHttpGifId`` blanks the
+    panel briefly and causes visible flashes at ~1 Hz.
 
-    Quirks that cause flashes if ignored:
-    - Incrementing ``PicID`` queues GIF slots; older layouts briefly play through.
-    - High ``PicSpeed`` (e.g. 1000) makes any queued slot linger ~1s.
-    - Some firmwares only reliably replace when PicID stays 1 after each reset.
+    Reset only on boot and when the caller requests a hard layout cut (screen
+    change). Avoid incrementing PicID: that queues animation slots and can
+    briefly replay older frames.
     """
 
-    # Still updates: keep low so a stray queued slot cannot linger visibly.
-    _PIC_SPEED_MS = 10
+    # Single-frame still; value is mostly ignored when PicNum=1.
+    _PIC_SPEED_MS = 1000
+    _PIC_ID = 1
 
     def __init__(self, ip: str, size: int = 64, *, timeout: float = 3.0) -> None:
         if size not in (16, 32, 64):
@@ -34,7 +34,7 @@ class PixooClient:
         self.size = size
         self.timeout = timeout
         self._url = f"http://{ip}/post"
-        # Drop leftover animation frames from a prior process, then start clean.
+        # Drop leftover multi-frame animations from a prior process.
         try:
             self._reset_gif_buffer()
         except Exception:
@@ -75,16 +75,12 @@ class PixooClient:
         except Exception:
             return False
 
-    def push_image(self, image: Image.Image, *, reset: bool = True) -> None:
-        """Push a 64×64 RGB still as a single-frame GIF replacement.
+    def push_image(self, image: Image.Image, *, reset: bool = False) -> None:
+        """Push a 64×64 RGB still, overwriting ``PicID=1``.
 
-        Always resets the GIF buffer and sends ``PicID=1`` (community live-
-        dashboard pattern). ``reset`` is kept for call-site compatibility; it
-        does not skip the reset — partial resets were still flashing on device.
-
-        Cost: 2 HTTP POSTs per frame (~1 Hz) — acceptable on LAN vs ghost frames.
+        ``reset=True`` clears the GIF buffer first (boot / screen change only).
+        Normal ticks overwrite in place — no blank flash between frames.
         """
-        del reset  # always reset; see docstring
         rgb = image.convert("RGB")
         if rgb.size != (self.size, self.size):
             try:
@@ -100,15 +96,16 @@ class PixooClient:
                 r, g, b = pixels[x, y]
                 buf.extend((r, g, b))
 
-        # Clear buffer then PicID=1 — never queue multi-frame animations.
-        self._reset_gif_buffer()
+        if reset:
+            self._reset_gif_buffer()
+
         self._post(
             {
                 "Command": "Draw/SendHttpGif",
                 "PicNum": 1,
                 "PicWidth": self.size,
                 "PicOffset": 0,
-                "PicID": 1,
+                "PicID": self._PIC_ID,
                 "PicSpeed": self._PIC_SPEED_MS,
                 "PicData": base64.b64encode(buf).decode("ascii"),
             }

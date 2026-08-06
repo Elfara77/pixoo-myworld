@@ -92,24 +92,27 @@ _NET_SAT_SMOOTH: float | None = None
 _SYS_HP_HIST: list[float] = []
 _NET_SAT_HIST: list[float] = []
 # SUM dwell D split into 8 equal slots (Σ=D):
-# 0–3 clients (4/8); 4–7 WAN graph (4/8) with DOWN|UP legend above the plot.
+# Chrome (DOWN/Wi/SYS/CPU/DSK/tops) stays fixed. Only the status strip swaps:
+# 0–3 VPN/Hot Wifi; 4–7 DOWN|UP legend + WAN sparkline.
 _SUM_DWELL_T0 = 0.0
 _SUM_DWELL_D = 1.0
 # Latched once per frame in set_sum_dwell — never recompute mid-render.
 _SUM_PHASE = 0
 _SUM_SHOW_WAN_GRAPH = False
-# One-frame hysteresis: require two consecutive raw readings before flipping
-# clients ↔ WAN graph (avoids a single boundary-tick wrong layout flash).
+# Confirm clients↔graph for N consecutive frames before flipping (smooth cut).
 _SUM_WAN_PENDING: bool | None = None
+_SUM_WAN_STREAK = 0
+_SUM_WAN_CONFIRM = 2  # ~2× frame_interval before layout swap
 
 
 def set_sum_dwell(t0: float, dwell_s: float) -> None:
     """Bind SUM phase clock to the current rotator dwell (call each SUM frame).
 
     Latches phase / graph-half at bind time so layout cannot flip mid-render.
-    Clients↔graph switches only after the new half is stable for one extra frame.
+    Clients↔graph flips only after ``_SUM_WAN_CONFIRM`` agreeing frames.
     """
-    global _SUM_DWELL_T0, _SUM_DWELL_D, _SUM_PHASE, _SUM_SHOW_WAN_GRAPH, _SUM_WAN_PENDING
+    global _SUM_DWELL_T0, _SUM_DWELL_D, _SUM_PHASE
+    global _SUM_SHOW_WAN_GRAPH, _SUM_WAN_PENDING, _SUM_WAN_STREAK
     import time
 
     t0_f = float(t0)
@@ -124,16 +127,23 @@ def set_sum_dwell(t0: float, dwell_s: float) -> None:
     if new_dwell:
         _SUM_SHOW_WAN_GRAPH = raw_wan
         _SUM_WAN_PENDING = raw_wan
+        _SUM_WAN_STREAK = 0
         return
 
     if raw_wan == _SUM_SHOW_WAN_GRAPH:
         _SUM_WAN_PENDING = raw_wan
+        _SUM_WAN_STREAK = 0
         return
 
-    # Boundary crossed: keep previous layout until the next confirming frame.
     if _SUM_WAN_PENDING == raw_wan:
+        _SUM_WAN_STREAK += 1
+    else:
+        _SUM_WAN_PENDING = raw_wan
+        _SUM_WAN_STREAK = 1
+
+    if _SUM_WAN_STREAK >= _SUM_WAN_CONFIRM:
         _SUM_SHOW_WAN_GRAPH = raw_wan
-    _SUM_WAN_PENDING = raw_wan
+        _SUM_WAN_STREAK = 0
 
 
 def sum_phase() -> int:
@@ -142,7 +152,7 @@ def sum_phase() -> int:
 
 
 def sum_show_wan_graph() -> bool:
-    """True for the last 4/8 of the SUM dwell (graph window; latched + hysteresis)."""
+    """True for the last 4/8 of the SUM dwell (graph window; latched + confirm)."""
     return _SUM_SHOW_WAN_GRAPH
 
 
@@ -1579,48 +1589,45 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _draw_sum_wi_lan_row(img, d, m, x0=x0, x1=x1, y=y)
     y += step
 
-    # 3–4) slots 0–3: SYS/NET+CPU/RAM — slots 4–7 (graph): DOWN/UP WiFi|Wired bars
+    # 3–4) SYS/NET + CPU/RAM — always (graph half only swaps legend/Hot below).
     show_wan_graph = sum_show_wan_graph()
     cpu = float(m.get("cpu", 0) or 0)
     ram = float(m.get("ram", 0) or 0)
     tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
     disk = _disk_used_pct(m)
 
-    if show_wan_graph:
-        y = _draw_sum_down_up_split_gauges(img, d, m, x0=x0, x1=x1, y=y, step=step)
-    else:
-        tr_sys = _trend_from_history(_SYS_HP_HIST, eps_abs=1.0, eps_ratio=0.02)
-        tr_net = _trend_from_history(_NET_SAT_HIST, eps_abs=1.0, eps_ratio=0.02)
+    tr_sys = _trend_from_history(_SYS_HP_HIST, eps_abs=1.0, eps_ratio=0.02)
+    tr_net = _trend_from_history(_NET_SAT_HIST, eps_abs=1.0, eps_ratio=0.02)
 
-        def _label_trend_gauge(
-            lab_x: int,
-            lab: str,
-            mark: str,
-            pct: float,
-            col,
-            *,
-            alert: bool,
-            g_x0: int,
-            g_w0: int,
-        ) -> None:
-            _txt(img, lab_x, y, lab, LABEL, size="tiny", role="label", alert=alert)
-            if mark:
-                _draw_trend(img, lab_x + lab_w, y, mark)
-            _gauge(d, g_x0, y, g_w0, pct, col, alert=alert)
+    def _label_trend_gauge(
+        lab_x: int,
+        lab: str,
+        mark: str,
+        pct: float,
+        col,
+        *,
+        alert: bool,
+        g_x0: int,
+        g_w0: int,
+    ) -> None:
+        _txt(img, lab_x, y, lab, LABEL, size="tiny", role="label", alert=alert)
+        if mark:
+            _draw_trend(img, lab_x + lab_w, y, mark)
+        _gauge(d, g_x0, y, g_w0, pct, col, alert=alert)
 
-        _label_trend_gauge(lab_l, "SYS", tr_sys, sys_hp, sys_col, alert=False, g_x0=g_l, g_w0=g_w_l)
-        _label_trend_gauge(lab_r, "NET", tr_net, net_sat, net_col, alert=False, g_x0=g_r, g_w0=g_w_r)
-        y += step
+    _label_trend_gauge(lab_l, "SYS", tr_sys, sys_hp, sys_col, alert=False, g_x0=g_l, g_w0=g_w_l)
+    _label_trend_gauge(lab_r, "NET", tr_net, net_sat, net_col, alert=False, g_x0=g_r, g_w0=g_w_r)
+    y += step
 
-        cpu_col = _diagram_color(cpu, kind="load")
-        ram_col = _diagram_color(ram, kind="load")
-        cpu_alert = _is_crit_load(cpu)
-        ram_alert = _is_crit_load(ram)
-        tr_cpu = _trend_from_history(m.get("cpu_history"), eps_abs=1.0, eps_ratio=0.02)
-        tr_ram = _trend_from_history(m.get("ram_history"), eps_abs=1.0, eps_ratio=0.02)
-        _label_trend_gauge(lab_l, "CPU", tr_cpu, cpu, cpu_col, alert=cpu_alert, g_x0=g_l, g_w0=g_w_l)
-        _label_trend_gauge(lab_r, "RAM", tr_ram, ram, ram_col, alert=ram_alert, g_x0=g_r, g_w0=g_w_r)
-        y += step
+    cpu_col = _diagram_color(cpu, kind="load")
+    ram_col = _diagram_color(ram, kind="load")
+    cpu_alert = _is_crit_load(cpu)
+    ram_alert = _is_crit_load(ram)
+    tr_cpu = _trend_from_history(m.get("cpu_history"), eps_abs=1.0, eps_ratio=0.02)
+    tr_ram = _trend_from_history(m.get("ram_history"), eps_abs=1.0, eps_ratio=0.02)
+    _label_trend_gauge(lab_l, "CPU", tr_cpu, cpu, cpu_col, alert=cpu_alert, g_x0=g_l, g_w0=g_w_l)
+    _label_trend_gauge(lab_r, "RAM", tr_ram, ram, ram_col, alert=ram_alert, g_x0=g_r, g_w0=g_w_r)
+    y += step
 
     # 5) DSK % …… TMP↑ °C — TMP label at same lab_r as NET/RAM
     dsk_col = _diagram_color(disk, kind="disk")
