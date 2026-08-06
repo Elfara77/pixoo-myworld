@@ -105,12 +105,12 @@ def set_sum_dwell(t0: float, dwell_s: float) -> None:
 
 
 def sum_phase() -> int:
-    """0–7 within current SUM dwell (equal eighths of D)."""
+    """0–7 within current SUM dwell (equal eighths of D, integer ms — no float edge flicker)."""
     import time
 
-    elapsed = max(0.0, time.monotonic() - _SUM_DWELL_T0)
-    eighth = _SUM_DWELL_D / 8.0
-    return min(7, int(elapsed / eighth))
+    elapsed_ms = max(0, int((time.monotonic() - _SUM_DWELL_T0) * 1000.0))
+    dwell_ms = max(80, int(round(_SUM_DWELL_D * 1000.0)))
+    return min(7, (elapsed_ms * 8) // dwell_ms)
 
 
 def sum_show_wan_graph() -> bool:
@@ -682,7 +682,8 @@ def _wifi_wired_split_bar(
         draw.rectangle([x, y, x1, y1], fill=BAR_BG)
         return
     # wifi_ratio = wifi/total → left width; remainder = wired (right).
-    wifi_w = int(round(w * (wifi / total)))
+    # Floor (not round) reduces 0.5-boundary left/right flicker.
+    wifi_w = int(w * (wifi / total))
     wifi_w = max(0, min(w, wifi_w))
     if wifi_w >= w:
         draw.rectangle([x, y, x1, y1], fill=ORANGE)
@@ -754,17 +755,61 @@ def _graph_fill_color(color: Sequence[int], *, scale: float = 0.38) -> tuple[int
     )
 
 
-def _graph(img, draw, x, y, w, h, data, color, filled: bool = False) -> None:
+# Peak-hold Y scales so rolling history max changes don't yank the whole plot.
+_GRAPH_Y_HOLD: dict[str, float] = {}
+
+
+def _held_ymax(key: str, raw: float, *, decay: float = 0.94) -> float:
+    """Instant rise, slow decay — kills temporal rescale jumps."""
+    raw = max(0.01, float(raw or 0))
+    prev = _GRAPH_Y_HOLD.get(key)
+    if prev is None or raw > prev:
+        held = raw
+    else:
+        held = max(raw, prev * decay)
+    _GRAPH_Y_HOLD[key] = held
+    return held
+
+
+def _pad_series_right(series: list[float], n: int) -> list[float]:
+    """Right-align samples in a fixed slot count (stable X map as history grows)."""
+    n = max(2, int(n))
+    if len(series) >= n:
+        return [float(v) for v in series[-n:]]
+    pad = n - len(series)
+    return [0.0] * pad + [float(v) for v in series]
+
+
+def _series_to_pts(
+    series: list[float],
+    *,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    ymax: float,
+) -> list[tuple[int, int]]:
+    if not series or w <= 0 or h <= 0:
+        return []
+    mx = max(0.01, float(ymax))
+    n = len(series)
+    out: list[tuple[int, int]] = []
+    for i, v in enumerate(series):
+        px = x + int(i * (w - 1) / max(1, n - 1))
+        py = y + h - 1 - int(max(0.0, min(1.0, float(v) / mx)) * (h - 1))
+        out.append((px, py))
+    return out
+
+
+def _graph(img, draw, x, y, w, h, data, color, filled: bool = False, *, scale_key: str = "g") -> None:
     if not data:
         _txt(img, x + 4, y + max(0, h // 2 - 3), "NO DATA", DIM, size="tiny", role="label")
         return
-    mx = max(max(data), 0.01)
-    pts = []
-    n = len(data)
-    for i, v in enumerate(data):
-        px = x + int(i * (w - 1) / max(1, n - 1))
-        py = y + h - 1 - int(max(0.0, min(1.0, float(v) / mx)) * (h - 1))
-        pts.append((px, py))
+    # Prefer width-aligned slots so X doesn't reshuffle while history fills.
+    slots = max(2, min(int(w), max(len(data), 2)))
+    series = _pad_series_right([float(v) for v in data], slots)
+    ymax = _held_ymax(scale_key, max(series))
+    pts = _series_to_pts(series, x=x, y=y, w=w, h=h, ymax=ymax)
     if filled and len(pts) >= 2:
         poly = pts + [(pts[-1][0], y + h - 1), (pts[0][0], y + h - 1)]
         draw.polygon(poly, fill=_graph_fill_color(color))
@@ -786,30 +831,25 @@ def _graph_up_down(
     *,
     fill_down: bool = True,
     fill_up: bool | None = None,
+    scale_key: str = "du",
 ) -> None:
-    """Down + up on one panel with shared vertical scale; optional area fills."""
-    down = list(down or [])
-    up = list(up or [])
+    """Down + up on one panel with shared held Y scale; optional area fills."""
+    down_r = [float(v) for v in (down or [])]
+    up_r = [float(v) for v in (up or [])]
     if fill_up is None:
         fill_up = fill_down
-    if not down and not up:
+    if not down_r and not up_r:
         _txt(img, x + 4, y + max(0, h // 2 - 3), "NO DATA", DIM, size="tiny", role="label")
         return
 
-    def _pts(series: list[float]) -> list[tuple[int, int]]:
-        if not series:
-            return []
-        mx = max(max(down, default=0), max(up, default=0), 0.01)
-        out: list[tuple[int, int]] = []
-        n = len(series)
-        for i, v in enumerate(series):
-            px = x + int(i * (w - 1) / max(1, n - 1))
-            py = y + h - 1 - int(max(0.0, min(1.0, float(v) / mx)) * (h - 1))
-            out.append((px, py))
-        return out
+    slots = max(2, min(int(w), max(len(down_r), len(up_r), 2)))
+    down_s = _pad_series_right(down_r, slots)
+    up_s = _pad_series_right(up_r, slots)
+    raw_max = max(max(down_s), max(up_s), 0.01)
+    ymax = _held_ymax(scale_key, raw_max)
 
-    d_pts = _pts(down)
-    u_pts = _pts(up)
+    d_pts = _series_to_pts(down_s, x=x, y=y, w=w, h=h, ymax=ymax)
+    u_pts = _series_to_pts(up_s, x=x, y=y, w=w, h=h, ymax=ymax)
     # Fills under curves first (weaker than stroke), then strokes on top.
     if fill_down and len(d_pts) >= 2:
         poly = d_pts + [(d_pts[-1][0], y + h - 1), (d_pts[0][0], y + h - 1)]
@@ -836,16 +876,19 @@ def _wlc_graph_panel(
     col_up,
     *,
     fill_down: bool = True,
+    scale_key: str = "wlc",
 ) -> None:
     """WiFi/Eth traffic mini-graphs (overlay or split per PIXOO_WLC_GRAPH_MODE)."""
     if _WLC_GRAPH_MODE == "split":
         gap = 1
         lw = max(8, (w - gap) // 2)
         rw = max(8, w - lw - gap)
-        _graph(img, draw, x, y, lw, h, list(down or []), col_down, filled=fill_down)
-        _graph(img, draw, x + lw + gap, y, rw, h, list(up or []), col_up, filled=False)
+        _graph(img, draw, x, y, lw, h, list(down or []), col_down, filled=fill_down, scale_key=f"{scale_key}:d")
+        _graph(img, draw, x + lw + gap, y, rw, h, list(up or []), col_up, filled=False, scale_key=f"{scale_key}:u")
         return
-    _graph_up_down(img, draw, x, y, w, h, down, up, col_down, col_up, fill_down=fill_down)
+    _graph_up_down(
+        img, draw, x, y, w, h, down, up, col_down, col_up, fill_down=fill_down, scale_key=scale_key
+    )
 
 
 def _demo_metrics() -> dict[str, Any]:
@@ -1187,9 +1230,10 @@ def _trend_from_history(
     eps_ratio: float = 0.05,
     allow_equal: bool = True,
 ) -> str:
-    """Compare last two history samples → ↑ / ↓ / = / empty if unknown.
+    """Compare recent history → ↑ / ↓ / = / empty if unknown.
 
-    Uses raw floats (decimals OK). Pass allow_equal=False to hide stable '='.
+    Uses a 2-sample mean vs prior 2-sample mean when possible to avoid
+    single-tick flicker at float thresholds.
     """
     try:
         vals = [float(x) for x in (hist or [])]
@@ -1197,7 +1241,11 @@ def _trend_from_history(
         return ""
     if len(vals) < 2:
         return ""
-    prev, cur = vals[-2], vals[-1]
+    if len(vals) >= 4:
+        prev = (vals[-4] + vals[-3]) / 2.0
+        cur = (vals[-2] + vals[-1]) / 2.0
+    else:
+        prev, cur = vals[-2], vals[-1]
     thr = max(float(eps_abs), float(eps_ratio) * max(abs(prev), abs(cur), 1e-9))
     if cur > prev + thr:
         return "↑"
@@ -1224,8 +1272,12 @@ def _draw_trend(img, x: int, y: int, mark: str) -> int:
     return _txt(img, x, y, mark, _trend_color(mark), size="tiny", role="status")
 
 
-def _score_hist_push(buf: list[float], val: float, *, keep: int = 4) -> None:
-    buf.append(float(val))
+def _score_hist_push(buf: list[float], val: float, *, keep: int = 4, min_delta: float = 0.5) -> None:
+    """Append only when the value moved enough — stops per-frame arrow flicker."""
+    v = float(val)
+    if buf and abs(buf[-1] - v) < min_delta:
+        return
+    buf.append(v)
     del buf[:-keep]
 
 
@@ -1534,6 +1586,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             GRAPH_DOWN,
             GRAPH_UP,
             fill_down=True,
+            scale_key="sum_wan",
         )
         y = block_y0 + step * 3
     else:
@@ -1650,7 +1703,7 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
             img, 20, 11, str(cpu_now), "%", _diagram_color(cpu_now, kind="load"), size="tiny",
             value_role="status", alert=_is_crit_load(cpu_now),
         )
-        _graph(img, d, 1, 18, 62, 18, cpu_h, _diagram_color(cpu_now, kind="load"), filled=True)
+        _graph(img, d, 1, 18, 62, 18, cpu_h, _diagram_color(cpu_now, kind="load"), filled=True, scale_key="lod_cpu")
         _txt(img, 2, 38, "RAM", LABEL, size="tiny", role="label")
         _draw_val_unit(
             img,
@@ -1663,7 +1716,7 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
             value_role="status",
             alert=_is_crit_load(ram_now),
         )
-        _graph(img, d, 1, 45, 62, 17, ram_h, _diagram_color(ram_now, kind="load"), filled=False)
+        _graph(img, d, 1, 45, 62, 17, ram_h, _diagram_color(ram_now, kind="load"), filled=False, scale_key="lod_ram")
 
     elif sid == "TMP":
         # Top: CPU | AVG — Bottom: 2.4GHz | 5GHz
@@ -1709,13 +1762,13 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
             _draw_rate(img, 14, 11, m.get("wan_down", 0))
             _txt_label(img, 34, 11, "Up", mbps=m.get("wan_up", 0))
             _draw_rate(img, 44, 11, m.get("wan_up", 0))
-            _wlc_graph_panel(img, d, 1, 18, 62, 44, down, up, GRAPH_DOWN, GRAPH_UP, fill_down=True)
+            _wlc_graph_panel(img, d, 1, 18, 62, 44, down, up, GRAPH_DOWN, GRAPH_UP, fill_down=True, scale_key="grp")
         else:
             _txt_label(img, 2, 11, "Dn", mbps=m.get("wan_down", 0))
             x = _draw_rate(img, 14, 11, m.get("wan_down", 0))
             _txt_label(img, min(x + 2, 34), 11, "Up", mbps=m.get("wan_up", 0))
             _draw_rate(img, min(x + 12, 44), 11, m.get("wan_up", 0))
-            _wlc_graph_panel(img, d, 1, 18, 62, 44, down, up, GRAPH_DOWN, GRAPH_UP, fill_down=True)
+            _wlc_graph_panel(img, d, 1, 18, 62, 44, down, up, GRAPH_DOWN, GRAPH_UP, fill_down=True, scale_key="grp")
 
     elif sid == "WLC":
         w_down = list(m.get("wifi_history_down") or [])
@@ -1726,12 +1779,12 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
         x = _draw_rate(img, 20, 11, m.get("wifi_down", 0))
         _txt_label(img, min(x + 2, 40), 11, "Up", mbps=m.get("wifi_up", 0))
         _draw_rate(img, min(x + 12, 48), 11, m.get("wifi_up", 0))
-        _wlc_graph_panel(img, d, 1, 18, 62, 17, w_down, w_up, GRAPH_DOWN, GRAPH_UP, fill_down=True)
+        _wlc_graph_panel(img, d, 1, 18, 62, 17, w_down, w_up, GRAPH_DOWN, GRAPH_UP, fill_down=True, scale_key="wlc_wifi")
         _txt(img, 2, 38, "Eth", LABEL, size="tiny", role="label")
         x = _draw_rate(img, 18, 38, m.get("lan_down", 0))
         _txt_label(img, min(x + 2, 40), 38, "Up", mbps=m.get("lan_up", 0))
         _draw_rate(img, min(x + 12, 48), 38, m.get("lan_up", 0))
-        _wlc_graph_panel(img, d, 1, 45, 62, 16, eth_down, eth_up, ORANGE, GRAPH_UP, fill_down=False)
+        _wlc_graph_panel(img, d, 1, 45, 62, 16, eth_down, eth_up, ORANGE, GRAPH_UP, fill_down=False, scale_key="wlc_eth")
 
     elif sid == "TOP":
         downs = _pick_top(m.get("top_down"), limit=2)

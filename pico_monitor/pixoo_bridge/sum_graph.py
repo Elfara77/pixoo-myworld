@@ -68,6 +68,7 @@ def render_sum_graph(img, draw: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         COL_DN,
         COL_UP,
         fill_down=True,
+        scale_key="sum_graph",
     )
 
     # Legend / peaks
