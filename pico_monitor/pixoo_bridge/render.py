@@ -52,7 +52,7 @@ SCREEN_TITLES = {
     "PIE": "Disks",
     "SRV": "Services",
     "SUM": "Summary",
-    "SUM_GRAPH": "SumGraph",
+    "SUM_GRAPH": "WAN hist",
 }
 
 _ACTIVE_SCREENS: list[str] = list(ALL_SCREEN_IDS)
@@ -1231,32 +1231,26 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
     y += step
 
-    # 7) Hot Wifi n …… peak tag (Wi-Fi STA only — wired clients excluded)
-    n_hot, hot = _greedy_clients(m, limit=3)
-    n_show = min(9, int(n_hot))
-    hot_col = DIM if n_show == 0 else FG
-    hot_lab = "Hot Wifi"
-    _txt(img, x0, y, hot_lab, LABEL, size="tiny", role="label")
-    _txt(
+    # 7) WAN down/up history (64 samples, 1px each) — replaces Hot Wifi
+    down_h = list(m.get("wan_history_down") or [])[-64:]
+    up_h = list(m.get("wan_history_up") or [])[-64:]
+    # Use two rows (12px) so the dual graph is readable above top clients.
+    gh = 11
+    _graph_up_down(
         img,
-        x0 + pf.text_width(hot_lab, size="tiny") + 2,
+        d,
+        x0,
         y,
-        str(n_show),
-        hot_col,
-        size="tiny",
-        role="status",
+        64,
+        gh,
+        down_h,
+        up_h,
+        GRAPH_DOWN,
+        GRAPH_UP,
+        fill_down=True,
     )
-    if hot:
-        _hn, hd, hu, hutil = hot[0]
-        tag = _client_dir_tag(hd, hu)
-        pk = f"{tag}{int(round(min(99.0, hutil * 100)))}"
-        pk_col = RED if tag == "B" else (YELLOW if tag in ("D", "U") else DIM)
-        _txt(img, _right_x(pk), y, pk, pk_col, size="tiny", role="status")
-    else:
-        _txt(img, _right_x("--"), y, "--", DIM, size="tiny", role="status")
-    y += step
+    y += gh + 1  # 12px block + 1px gap before tops
 
-    # 8) Two top-client rows under Hot (stop before bottom 7px footer band)
     tops = _rank_clients_by_wan_util(m)[:2]
     tag_cols = {"D": GRAPH_DOWN, "U": ORANGE, "B": RED}
     footer_y0 = 64 - 7
