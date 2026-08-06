@@ -1133,6 +1133,30 @@ def _draw_sum_footer(img, draw: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     pf.draw_tiny(img, date_x, text_y, date_s, black)
 
 
+def _draw_sum_graph_dir_badge(
+    img,
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+) -> None:
+    """Left DW/UP badge on SUM WAN graph: 1px padded pill, color fill, black text.
+
+    Alternates DW ↔ UP every 1s at the same position for the whole graph phase.
+    """
+    import time
+
+    show_up = (int(time.monotonic()) % 2) == 1
+    lab = "UP" if show_up else "DW"
+    fill = GRAPH_UP if show_up else GRAPH_DOWN
+    pad = 1
+    ink = max(1, pf.text_ink_width(lab, size="tiny"))
+    # 1px frame around 5px tiny glyphs → 7px tall, like the SUM footer band.
+    bw = ink + pad * 2
+    bh = 5 + pad * 2
+    draw.rectangle([x, y, x + bw - 1, y + bh - 1], fill=fill, outline=fill)
+    pf.draw_tiny(img, x + pad, y + pad, lab, (0, 0, 0))
+
+
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     """Full-bleed summary: DWN first; 2 top hosts; footer time/uptime/date inverted."""
     sys_hp = _system_health_score(m)
@@ -1319,9 +1343,8 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             GRAPH_UP,
             fill_down=True,
         )
-        # Tiny legend corners
-        _txt(img, x0, block_y0, "DN", GRAPH_DOWN, size="tiny", role="status")
-        _txt(img, x1 - pf.text_ink_width("UP", size="tiny") + 1, block_y0, "UP", GRAPH_UP, size="tiny", role="status")
+        # Same left spot: DW ↔ UP every 1s, inverted pill like footer.
+        _draw_sum_graph_dir_badge(img, d, x0, block_y0)
         y = block_y0 + step * 3
     else:
         # Hot Wifi n …… down_rate up_rate (hottest Wi‑Fi STA)
@@ -1354,29 +1377,24 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             _txt(img, _right_x("--"), y, "--", DIM, size="tiny", role="status")
         y += step
 
-        # Two top-client rows (hostname + rate)
-        tops = _rank_clients_by_wan_util(m)[:2]
-        tag_cols = {"D": GRAPH_DOWN, "U": ORANGE, "B": RED}
+        # Line 1 = #1 top_up; line 2 = #1 top_down (hostname + rate only)
         footer_y0 = 64 - 7
-        for i in range(2):
+        for name_rate, cap in (
+            (_pick_top(m.get("top_up"), limit=1), _WAN_MAX_UP_MBPS),
+            (_pick_top(m.get("top_down"), limit=1), _WAN_MAX_DOWN_MBPS),
+        ):
             if y + 4 >= footer_y0:
                 break
-            if i >= len(tops):
+            if not name_rate:
                 _txt(img, x0, y, "-", DIM, size="tiny", role="status")
                 y += step
                 continue
-            name, cd, cu, _util = tops[i]
-            tag = _client_dir_tag(cd, cu)
-            rate, cap = _client_dir_rate(cd, cu, tag)
-            host_col = _top_hostname_color(cd, cu)
-            rate_col = _wan_link_color(rate, cap)
-            _txt(img, x0, y, tag, tag_cols.get(tag, FG), size="tiny", role="status")
+            name, rate = name_rate[0]
             rate_w = _rate_ink_width(rate)
-            name_x = x0 + pf.text_width(tag, size="tiny") + 2
-            max_name_w = max(0, x1 - rate_w - 2 - name_x + 1)
+            max_name_w = max(0, x1 - rate_w - 2 - x0 + 1)
             shown = _truncate_to_width(str(name), max_name_w)
-            _txt(img, name_x, y, shown, host_col, size="tiny", role="status")
-            _draw_rate_right(img, x1, y, rate, color=rate_col)
+            _txt(img, x0, y, shown, FG if rate > 0 else DIM, size="tiny", role="status")
+            _draw_rate_right(img, x1, y, rate, color=_wan_link_color(rate, cap))
             y += step
 
     # 9) Footer pinned to bottom: continuous 7px inverted band
