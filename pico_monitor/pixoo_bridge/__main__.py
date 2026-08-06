@@ -37,7 +37,6 @@ from pixoo_bridge.render import (
     screen_dwell_seconds,
     set_render_options,
     set_sum_dwell,
-    sum_show_wan_graph,
     _demo_metrics,
 )
 
@@ -329,7 +328,6 @@ def main(argv: list[str] | None = None) -> int:
     metrics_ok = 0
     metrics_fail = 0
     screens = get_screen_ids()
-    layout_key: tuple[str, bool | None] | None = None
     LOG.info("loop screens=%s ids=%s", len(screens), ",".join(screens))
 
     while True:
@@ -376,20 +374,14 @@ def main(argv: list[str] | None = None) -> int:
         screen_i = screen_i % len(screens)
         cur_sid = screens[screen_i]
         dwell = screen_dwell_seconds(cur_sid, args.screen_seconds)
-        wan_graph: bool | None = None
         if cur_sid == "SUM":
             set_sum_dwell(screen_t0, dwell)
-            wan_graph = sum_show_wan_graph()
         frame = render_screen(m, screen_i)
         if args.preview:
             frame.save(args.preview / f"{screen_i:02d}_{screens[screen_i].lower()}.png")
-        # Clear GIF buffer on screen / SUM clients↔graph layout changes to avoid
-        # brief ghosts of the previous frame (PicSpeed used to leave them ~1s).
-        next_layout = (cur_sid, wan_graph)
-        reset_gif = layout_key != next_layout
-        layout_key = next_layout
+        # Client always ResetHttpGifId + PicID=1 (single-frame replace).
         try:
-            client.push_image(frame, reset=reset_gif)
+            client.push_image(frame)
             if snapshot_path is not None:
                 _save_snapshot(frame, snapshot_path, screen_id=screens[screen_i])
         except Exception as exc:

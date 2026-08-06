@@ -12,11 +12,19 @@ from PIL import Image
 
 
 class PixooClient:
-    """Pushes 64×64 RGB frames via Draw/SendHttpGif."""
+    """Pushes 64×64 RGB frames via Draw/SendHttpGif.
 
-    _REFRESH_LIMIT = 32
+    Live-dashboard pattern (Divoom / community): every still is a *replace*, not
+    an animation frame. Always ``ResetHttpGifId`` then ``SendHttpGif`` with
+    ``PicID=1``, ``PicNum=1``, ``PicOffset=0``, low ``PicSpeed``.
 
-    # PicSpeed for still updates: low so any queued GIF slot does not linger ~1s.
+    Quirks that cause flashes if ignored:
+    - Incrementing ``PicID`` queues GIF slots; older layouts briefly play through.
+    - High ``PicSpeed`` (e.g. 1000) makes any queued slot linger ~1s.
+    - Some firmwares only reliably replace when PicID stays 1 after each reset.
+    """
+
+    # Still updates: keep low so a stray queued slot cannot linger visibly.
     _PIC_SPEED_MS = 10
 
     def __init__(self, ip: str, size: int = 64, *, timeout: float = 3.0) -> None:
@@ -26,12 +34,11 @@ class PixooClient:
         self.size = size
         self.timeout = timeout
         self._url = f"http://{ip}/post"
-        self._pic_id = 0
         # Drop leftover animation frames from a prior process, then start clean.
         try:
-            self._reset_pic_id()
+            self._reset_gif_buffer()
         except Exception:
-            self._pic_id = 0
+            pass
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
@@ -54,9 +61,8 @@ class PixooClient:
             raise RuntimeError(f"Pixoo API error: {data}")
         return data if isinstance(data, dict) else {}
 
-    def _reset_pic_id(self) -> None:
+    def _reset_gif_buffer(self) -> None:
         self._post({"Command": "Draw/ResetHttpGifId"})
-        self._pic_id = 0
 
     def set_brightness(self, brightness: int) -> None:
         brightness = max(0, min(100, int(brightness)))
@@ -69,8 +75,16 @@ class PixooClient:
         except Exception:
             return False
 
-    def push_image(self, image: Image.Image, *, reset: bool = False) -> None:
-        """Push a 64×64 RGB still. ``reset=True`` clears the GIF buffer (layout changes)."""
+    def push_image(self, image: Image.Image, *, reset: bool = True) -> None:
+        """Push a 64×64 RGB still as a single-frame GIF replacement.
+
+        Always resets the GIF buffer and sends ``PicID=1`` (community live-
+        dashboard pattern). ``reset`` is kept for call-site compatibility; it
+        does not skip the reset — partial resets were still flashing on device.
+
+        Cost: 2 HTTP POSTs per frame (~1 Hz) — acceptable on LAN vs ghost frames.
+        """
+        del reset  # always reset; see docstring
         rgb = image.convert("RGB")
         if rgb.size != (self.size, self.size):
             try:
@@ -86,19 +100,15 @@ class PixooClient:
                 r, g, b = pixels[x, y]
                 buf.extend((r, g, b))
 
-        next_id = self._pic_id + 1
-        if reset or next_id >= self._REFRESH_LIMIT:
-            self._reset_pic_id()
-            next_id = 1
-        self._pic_id = next_id
-
+        # Clear buffer then PicID=1 — never queue multi-frame animations.
+        self._reset_gif_buffer()
         self._post(
             {
                 "Command": "Draw/SendHttpGif",
                 "PicNum": 1,
                 "PicWidth": self.size,
                 "PicOffset": 0,
-                "PicID": self._pic_id,
+                "PicID": 1,
                 "PicSpeed": self._PIC_SPEED_MS,
                 "PicData": base64.b64encode(buf).decode("ascii"),
             }

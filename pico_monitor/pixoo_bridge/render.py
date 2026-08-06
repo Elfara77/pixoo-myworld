@@ -98,22 +98,42 @@ _SUM_DWELL_D = 1.0
 # Latched once per frame in set_sum_dwell — never recompute mid-render.
 _SUM_PHASE = 0
 _SUM_SHOW_WAN_GRAPH = False
+# One-frame hysteresis: require two consecutive raw readings before flipping
+# clients ↔ WAN graph (avoids a single boundary-tick wrong layout flash).
+_SUM_WAN_PENDING: bool | None = None
 
 
 def set_sum_dwell(t0: float, dwell_s: float) -> None:
     """Bind SUM phase clock to the current rotator dwell (call each SUM frame).
 
     Latches phase / graph-half at bind time so layout cannot flip mid-render.
+    Clients↔graph switches only after the new half is stable for one extra frame.
     """
-    global _SUM_DWELL_T0, _SUM_DWELL_D, _SUM_PHASE, _SUM_SHOW_WAN_GRAPH
+    global _SUM_DWELL_T0, _SUM_DWELL_D, _SUM_PHASE, _SUM_SHOW_WAN_GRAPH, _SUM_WAN_PENDING
     import time
 
-    _SUM_DWELL_T0 = float(t0)
+    t0_f = float(t0)
+    new_dwell = t0_f != _SUM_DWELL_T0
+    _SUM_DWELL_T0 = t0_f
     _SUM_DWELL_D = max(0.08, float(dwell_s))
     elapsed_ms = max(0, int((time.monotonic() - _SUM_DWELL_T0) * 1000.0))
     dwell_ms = max(80, int(round(_SUM_DWELL_D * 1000.0)))
     _SUM_PHASE = min(7, (elapsed_ms * 8) // dwell_ms)
-    _SUM_SHOW_WAN_GRAPH = _SUM_PHASE >= 4
+    raw_wan = _SUM_PHASE >= 4
+
+    if new_dwell:
+        _SUM_SHOW_WAN_GRAPH = raw_wan
+        _SUM_WAN_PENDING = raw_wan
+        return
+
+    if raw_wan == _SUM_SHOW_WAN_GRAPH:
+        _SUM_WAN_PENDING = raw_wan
+        return
+
+    # Boundary crossed: keep previous layout until the next confirming frame.
+    if _SUM_WAN_PENDING == raw_wan:
+        _SUM_SHOW_WAN_GRAPH = raw_wan
+    _SUM_WAN_PENDING = raw_wan
 
 
 def sum_phase() -> int:
@@ -122,7 +142,7 @@ def sum_phase() -> int:
 
 
 def sum_show_wan_graph() -> bool:
-    """True for the last 4/8 of the SUM dwell (graph window; latched per frame)."""
+    """True for the last 4/8 of the SUM dwell (graph window; latched + hysteresis)."""
     return _SUM_SHOW_WAN_GRAPH
 
 
