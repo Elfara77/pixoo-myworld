@@ -74,6 +74,11 @@ _TINY: dict[str, tuple[int, ...]] = {
     " ": (0x00, 0x00, 0x00),
     "-": (0x04, 0x04, 0x04),
     "/": (0x18, 0x04, 0x03),
+    "|": (0x00, 0x1F, 0x00),  # vertical bar (footer band separator)
+    "?": (0x01, 0x15, 0x02),  # tiny question mark (sub-1M peak placeholder)
+    "=": (0x0A, 0x0A, 0x0A),  # neutral trend
+    "↑": (0x02, 0x1F, 0x02),  # trend up vs previous sample
+    "↓": (0x08, 0x1F, 0x08),  # trend down vs previous sample
     "°": (0x00, 0x01, 0x00),  # single top-center pixel (see draw_tiny)
 }
 
