@@ -1290,11 +1290,12 @@ def _draw_sum_inv_lab(
     text: str,
     fill: Sequence[int],
 ) -> int:
-    """Inverted tiny label (black on `fill`, 1px side pad). Returns x after badge."""
+    """Inverted tiny label (black on `fill`, 1px pad all sides). Returns x after badge."""
     pad = 1
     ink = max(1, pf.text_ink_width(text, size="tiny"))
     bw = ink + pad * 2
-    draw.rectangle([x, y, x + bw - 1, y + 4], fill=fill, outline=fill)
+    # 1px above + 5px glyph + 1px below → taller color band on Wi/LAN only.
+    draw.rectangle([x, y - pad, x + bw - 1, y + 4 + pad], fill=fill, outline=fill)
     pf.draw_tiny(img, x + pad, y, text, (0, 0, 0))
     return x + bw
 
