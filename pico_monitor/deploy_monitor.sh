@@ -652,14 +652,17 @@ configure_screens() {
         printf '   %d) [ ] %s\n' "$((i + 1))" "${label}"
       fi
     done
-    echo "   a) défauts (sans SUM)   n) aucun   d) done"
+    echo "   a) défauts (sans SUM)   s) SUM seul   n) aucun   d) done"
     echo ""
     local c
-    read -r -p "Toggle [1-${#pick[@]}/a/n/d]: " c
+    read -r -p "Toggle [1-${#pick[@]}/a/s/n/d]: " c
     c="${c:-d}"
     case "${c}" in
       a|A|all)
         on=("${ALL_PIXOO_SCREENS[@]}")
+        ;;
+      s|S|sum|SUM)
+        on=("SUM")
         ;;
       n|N|none)
         on=()

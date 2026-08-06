@@ -856,24 +856,51 @@ def _top_hostname_color(down_mbps: float, up_mbps: float) -> tuple[int, int, int
     return GREEN
 
 
+def _client_dir_tag(down_mbps: float, up_mbps: float) -> str:
+    """D=down, U=up, B=both greedy — why this client ranks as top."""
+    d_u = float(down_mbps) / _WAN_MAX_DOWN_MBPS
+    u_u = float(up_mbps) / _WAN_MAX_UP_MBPS
+    greedy_dn = d_u >= _GREEDY_UTIL
+    greedy_up = u_u >= _GREEDY_UTIL
+    if greedy_dn and greedy_up:
+        return "B"
+    if greedy_up and not greedy_dn:
+        return "U"
+    if greedy_dn and not greedy_up:
+        return "D"
+    return "U" if u_u > d_u else "D"
+
+
+def _client_dir_rate(down_mbps: float, up_mbps: float, tag: str) -> tuple[float, float]:
+    """Rate to show + WAN cap for coloring, from D/U/B tag."""
+    if tag == "U":
+        return float(up_mbps), _WAN_MAX_UP_MBPS
+    if tag == "B":
+        # Show the hotter side's rate when both are greedy.
+        if (float(up_mbps) / _WAN_MAX_UP_MBPS) >= (float(down_mbps) / _WAN_MAX_DOWN_MBPS):
+            return float(up_mbps), _WAN_MAX_UP_MBPS
+        return float(down_mbps), _WAN_MAX_DOWN_MBPS
+    return float(down_mbps), _WAN_MAX_DOWN_MBPS
+
+
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """Full-bleed summary: compact SYS/NET gauges, CPU/RAM, DSK/TMP, clients, DWN/UP, Hot/Top."""
+    """Full-bleed summary: aligned gauges, WiFi/LAN, VPN/USB, DWN/UP, Hot, top hosts."""
     sys_hp = _system_health_score(m)
     net_sat = _network_saturation(m)
     sys_col = _sys_health_color(sys_hp)
     net_col = _net_sat_color(net_sat)
 
-    # Tiny glyph ≈5px; 1px gap between rows → step 6.
-    step = 6
+    # Shared columns so SYS/NET match CPU/RAM.
+    lab_l, g_l, g_w = 1, 14, 16
+    lab_r, g_r = 34, 47
+    step = 6  # 5px tiny + 1px gap
     y = 1
 
-    # 1) SYS [gauge] NET [gauge] — no % text
-    _txt(img, 1, y, "SYS", LABEL, size="tiny", role="label")
-    gx = 1 + pf.text_width("SYS", size="tiny") + 1
-    _gauge(d, gx, y, 16, sys_hp, sys_col, alert=False)
-    nx = gx + 16 + 2
-    _txt(img, nx, y, "NET", LABEL, size="tiny", role="label")
-    _gauge(d, nx + pf.text_width("NET", size="tiny") + 1, y, 16, net_sat, net_col, alert=False)
+    # 1) SYS [gauge] NET [gauge]
+    _txt(img, lab_l, y, "SYS", LABEL, size="tiny", role="label")
+    _gauge(d, g_l, y, g_w, sys_hp, sys_col, alert=False)
+    _txt(img, lab_r, y, "NET", LABEL, size="tiny", role="label")
+    _gauge(d, g_r, y, g_w, net_sat, net_col, alert=False)
     y += step
 
     cpu = float(m.get("cpu", 0) or 0)
@@ -881,27 +908,26 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
     disk = _disk_used_pct(m)
 
-    # 2) CPU [gauge] RAM [gauge] — labels + gauges only
+    # 2) CPU [gauge] RAM [gauge]
     cpu_col = _diagram_color(cpu, kind="load")
     ram_col = _diagram_color(ram, kind="load")
     cpu_alert = _is_crit_load(cpu)
     ram_alert = _is_crit_load(ram)
-    _txt(img, 1, y, "CPU", LABEL, size="tiny", role="label", alert=cpu_alert)
-    _gauge(d, 1 + pf.text_width("CPU", size="tiny") + 1, y, 16, cpu, cpu_col, alert=cpu_alert)
-    rx = 34
-    _txt(img, rx, y, "RAM", LABEL, size="tiny", role="label", alert=ram_alert)
-    _gauge(d, rx + pf.text_width("RAM", size="tiny") + 1, y, 16, ram, ram_col, alert=ram_alert)
+    _txt(img, lab_l, y, "CPU", LABEL, size="tiny", role="label", alert=cpu_alert)
+    _gauge(d, g_l, y, g_w, cpu, cpu_col, alert=cpu_alert)
+    _txt(img, lab_r, y, "RAM", LABEL, size="tiny", role="label", alert=ram_alert)
+    _gauge(d, g_r, y, g_w, ram, ram_col, alert=ram_alert)
     y += step
 
-    # 3) DSK % …… TMP °C — values only, no gauges
+    # 3) DSK % …… TMP °C
     dsk_col = _diagram_color(disk, kind="disk")
     tmp_i = int(tmp)
     tmp_hot = _is_crit_temp_tile(tmp_i)
     tmp_col = RED if tmp_hot else _temp_tile_color(tmp_i)
-    _txt(img, 1, y, "DSK", LABEL, size="tiny", role="label", alert=_is_crit_disk_tile(disk))
+    _txt(img, lab_l, y, "DSK", LABEL, size="tiny", role="label", alert=_is_crit_disk_tile(disk))
     _draw_val_unit(
         img,
-        1 + pf.text_width("DSK", size="tiny") + 2,
+        lab_l + pf.text_width("DSK", size="tiny") + 2,
         y,
         str(int(disk)),
         "%",
@@ -912,7 +938,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     )
     _txt(
         img,
-        34,
+        lab_r,
         y,
         "TMP",
         RED if tmp_hot else LABEL,
@@ -921,7 +947,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     )
     _draw_val_unit(
         img,
-        34 + pf.text_width("TMP", size="tiny") + 2,
+        lab_r + pf.text_width("TMP", size="tiny") + 2,
         y,
         str(tmp_i),
         "°C",
@@ -931,46 +957,54 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     )
     y += step
 
-    # 4) 15/17 LAN1234 VPN123 — wifi & total green, "/" cyan; compact if needed
+    # 4) WiFi 15/17 LAN1234
     clients = int(m.get("clients", 0) or 0)
     wifi = int(m.get("clients_wifi", 0) or 0)
     ports = list(m.get("lan_ports") or [False, False, False, False])[:4]
     while len(ports) < 4:
         ports.append(False)
-    slots = _vpn_slots(m)[:3]
-
-    def _draw_clients_row(*, lan_lab: str, vpn_lab: str) -> int:
-        cx = 1
-        cx = _txt(img, cx, y, str(wifi), GREEN, size="tiny", role="status")
-        cx = _txt(img, cx, y, "/", HEADER, size="tiny", role="status")
-        cx = _txt(img, cx, y, str(clients), GREEN, size="tiny", role="status")
-        cx += 1
-        cx = _txt(img, cx, y, lan_lab, LABEL, size="tiny", role="label")
-        for i, up in enumerate(ports, start=1):
-            cx = _txt(img, cx, y, str(i), GREEN if up else RED, size="tiny", role="status")
-        cx += 1
-        cx = _txt(img, cx, y, vpn_lab, LABEL, size="tiny", role="label")
-        for i, (_name, on, _typ) in enumerate(slots, start=1):
-            cx = _txt(img, cx, y, str(i), GREEN if on else RED, size="tiny", role="status")
-        return cx
-
-    # Full LAN/VPN labels when they fit (64px); else L/V.
-    need = (
-        pf.text_width(f"{wifi}/{clients}", size="tiny")
+    ratio = f"{wifi}/{clients}"
+    lan_tail_w = pf.text_width("LAN", size="tiny") + 4 * pf.text_width("0", size="tiny")
+    wifi_lab = "WiFi"
+    if (
+        pf.text_width(wifi_lab, size="tiny")
         + 1
-        + pf.text_width("LAN", size="tiny")
-        + 4 * pf.text_width("0", size="tiny")
+        + pf.text_width(ratio, size="tiny")
         + 1
-        + pf.text_width("VPN", size="tiny")
-        + 3 * pf.text_width("0", size="tiny")
-    )
-    if need <= 63:
-        _draw_clients_row(lan_lab="LAN", vpn_lab="VPN")
-    else:
-        _draw_clients_row(lan_lab="L", vpn_lab="V")
+        + lan_tail_w
+        > 63
+    ):
+        wifi_lab = "Wi"
+    x = 1
+    x = _txt(img, x, y, wifi_lab, LABEL, size="tiny", role="label")
+    x += 1
+    x = _txt(img, x, y, str(wifi), GREEN, size="tiny", role="status")
+    x = _txt(img, x, y, "/", HEADER, size="tiny", role="status")
+    x = _txt(img, x, y, str(clients), GREEN, size="tiny", role="status")
+    x += 1
+    x = _txt(img, x, y, "LAN", LABEL, size="tiny", role="label")
+    for i, up in enumerate(ports, start=1):
+        x = _txt(img, x, y, str(i), GREEN if up else RED, size="tiny", role="status")
     y += step
 
-    # 5) DWN … | UP … — UP locked: label + reserved "100K" slot, rate right-justified
+    # 5) VPN123 …… USB23 (USB right-justified)
+    x = 1
+    x = _txt(img, x, y, "VPN", LABEL, size="tiny", role="label")
+    for i, (_name, on, _typ) in enumerate(_vpn_slots(m)[:3], start=1):
+        x = _txt(img, x, y, str(i), GREEN if on else RED, size="tiny", role="status")
+    usb2 = m.get("usb2") or {}
+    usb3 = m.get("usb3") or {}
+    usb = m.get("usb") or {}
+    u2 = bool(usb2.get("present") or usb.get("present"))
+    u3 = bool(usb3.get("present"))
+    usb_w = pf.text_width("USB", size="tiny") + 2 * pf.text_width("0", size="tiny")
+    ux = 63 - usb_w + 1
+    ux = _txt(img, ux, y, "USB", LABEL, size="tiny", role="label")
+    ux = _txt(img, ux, y, "2", GREEN if u2 else RED, size="tiny", role="status")
+    _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
+    y += step
+
+    # 6) DWN … | UP … (UP fixed slot)
     down = float(m.get("wan_down", 0) or 0)
     up = float(m.get("wan_up", 0) or 0)
     down_col = _wan_link_color(down, _WAN_MAX_DOWN_MBPS)
@@ -984,11 +1018,8 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _draw_rate_right(img, 63, y, up, color=up_col)
     y += step
 
-    # 6) Hot N (fixed 3+1+1 chars) then Top hostname [rate]
-    # Reserved: "Hot" + space + one digit → Top always at same x.
-    hot_slot_w = pf.text_width("Hot", size="tiny") + 4 + pf.text_width("0", size="tiny")
-    top_x = 1 + hot_slot_w + 2
-    n_hot, _hot = _greedy_clients(m, limit=3)
+    # 7) Hot n …… peak tag (D/U/B + util%) of greediest — end-of-line summary
+    n_hot, hot = _greedy_clients(m, limit=3)
     n_show = min(9, int(n_hot))
     hot_col = DIM if n_show == 0 else (YELLOW if n_show < 3 else RED)
     _txt(img, 1, y, "Hot", LABEL, size="tiny", role="label")
@@ -1001,33 +1032,42 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         size="tiny",
         role="status",
     )
-    _txt(img, top_x, y, "Top", LABEL, size="tiny", role="label")
-    top = _pick_top_by_wan_util(m)
-    name_x = top_x + pf.text_width("Top", size="tiny") + 2
-    if top:
-        name, rate = top
-        ranked0 = _rank_clients_by_wan_util(m)
-        d0 = u0 = 0.0
-        if ranked0 and ranked0[0][0] == name:
-            _n, d0, u0, _u = ranked0[0]
-        elif ranked0:
-            for n, d, u, _util in ranked0:
-                if n == name:
-                    d0, u0 = d, u
-                    break
-        host_col = _top_hostname_color(d0, u0)
-        if d0 / _WAN_MAX_DOWN_MBPS >= u0 / _WAN_MAX_UP_MBPS:
-            rate_col = _wan_link_color(rate, _WAN_MAX_DOWN_MBPS)
-        else:
-            rate_col = _wan_link_color(rate, _WAN_MAX_UP_MBPS)
+    if hot:
+        _hn, hd, hu, hutil = hot[0]
+        tag = _client_dir_tag(hd, hu)
+        pk = f"{tag}{int(round(min(99.0, hutil * 100)))}"
+        pk_col = RED if tag == "B" else (YELLOW if tag in ("D", "U") else DIM)
+        _txt(
+            img,
+            max(0, 63 - pf.text_width(pk, size="tiny") + 1),
+            y,
+            pk,
+            pk_col,
+            size="tiny",
+            role="status",
+        )
+    else:
+        _txt(img, max(0, 63 - pf.text_width("--", size="tiny") + 1), y, "--", DIM, size="tiny", role="status")
+    y += step
+
+    # 8+) Top clients — one hostname/line, D|U|B + rate (why they are top)
+    tops = _rank_clients_by_wan_util(m)[:3]
+    tag_cols = {"D": GRAPH_DOWN, "U": ORANGE, "B": RED}
+    for name, cd, cu, _util in tops:
+        if y > 58:
+            break
+        tag = _client_dir_tag(cd, cu)
+        rate, cap = _client_dir_rate(cd, cu, tag)
+        host_col = _top_hostname_color(cd, cu)
+        rate_col = _wan_link_color(rate, cap)
+        _txt(img, 1, y, tag, tag_cols.get(tag, FG), size="tiny", role="status")
         rate_w = _rate_pixel_width(rate)
+        name_x = 1 + pf.text_width(tag, size="tiny") + 2
         max_name_w = max(0, 63 - rate_w - 2 - name_x + 1)
         shown = _truncate_to_width(str(name), max_name_w)
         _txt(img, name_x, y, shown, host_col, size="tiny", role="status")
         _draw_rate_right(img, 63, y, rate, color=rate_col)
-    else:
-        uptime = str(m.get("uptime_str", "--"))[:8]
-        _txt(img, name_x, y, uptime, FG, size="tiny", role="value")
+        y += step
 
 
 def render_screen(m: dict[str, Any], idx: int) -> Image.Image:

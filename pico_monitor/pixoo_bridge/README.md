@@ -50,7 +50,7 @@ cd pico_monitor
 | `PIXOO_BRIGHTNESS` / `--brightness` | `50` | Luminosité Pixoo 0–100 |
 | `PIXOO_SCREENS` / `--screens` | `all` | `all` = défauts **sans SUM**. Optionnel : `SUM` (résumé santé, sans bannière), seul ou mélangé (`all,SUM` / `SUM,SYS,…`). Pastille position si >1 écran (sauf SUM qui n’a pas de bannière). |
 
-Ordre logique défaut : System → Load → Temps → Traffic → WiFi/LAN → Top → Clients → Ports → Disk → Services. **SUM** = `SYS`/`NET` jauges, CPU/RAM jauges, DSK%/TMP°C, `wifi/total LAN#### VPN###`, DWN/UP, `Hot N Top host` ; non inclus dans `all`.
+Ordre logique défaut : System → Load → Temps → Traffic → WiFi/LAN → Top → Clients → Ports → Disk → Services. **SUM** = jauges SYS/NET+CPU/RAM, DSK/TMP, WiFi/LAN, VPN/USB, DWN/UP, Hot+peak, puis jusqu’à 3 clients `D|U|B host rate` ; non inclus dans `all` (deploy : touche **s** = SUM seul).
 
 ## Probe
 
