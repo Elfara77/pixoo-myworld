@@ -845,6 +845,17 @@ def _greedy_clients(
     return len(greedy), greedy[:limit]
 
 
+def _top_hostname_color(down_mbps: float, up_mbps: float) -> tuple[int, int, int]:
+    """Green idle; yellow if greedy on one side; red if greedy down and up (streaming)."""
+    greedy_dn = (float(down_mbps) / _WAN_MAX_DOWN_MBPS) >= _GREEDY_UTIL
+    greedy_up = (float(up_mbps) / _WAN_MAX_UP_MBPS) >= _GREEDY_UTIL
+    if greedy_dn and greedy_up:
+        return RED
+    if greedy_dn or greedy_up:
+        return YELLOW
+    return GREEN
+
+
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     """Full-bleed summary: compact SYS/NET gauges, CPU/RAM, DSK/TMP, clients, DWN/UP, Hot/Top."""
     sys_hp = _system_health_score(m)
@@ -996,18 +1007,24 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     if top:
         name, rate = top
         ranked0 = _rank_clients_by_wan_util(m)
-        top_col = FG
+        d0 = u0 = 0.0
         if ranked0 and ranked0[0][0] == name:
             _n, d0, u0, _u = ranked0[0]
-            if d0 / _WAN_MAX_DOWN_MBPS >= u0 / _WAN_MAX_UP_MBPS:
-                top_col = _wan_link_color(rate, _WAN_MAX_DOWN_MBPS)
-            else:
-                top_col = _wan_link_color(rate, _WAN_MAX_UP_MBPS)
+        elif ranked0:
+            for n, d, u, _util in ranked0:
+                if n == name:
+                    d0, u0 = d, u
+                    break
+        host_col = _top_hostname_color(d0, u0)
+        if d0 / _WAN_MAX_DOWN_MBPS >= u0 / _WAN_MAX_UP_MBPS:
+            rate_col = _wan_link_color(rate, _WAN_MAX_DOWN_MBPS)
+        else:
+            rate_col = _wan_link_color(rate, _WAN_MAX_UP_MBPS)
         rate_w = _rate_pixel_width(rate)
         max_name_w = max(0, 63 - rate_w - 2 - name_x + 1)
         shown = _truncate_to_width(str(name), max_name_w)
-        _txt(img, name_x, y, shown, FG, size="tiny", role="value")
-        _draw_rate_right(img, 63, y, rate, color=top_col)
+        _txt(img, name_x, y, shown, host_col, size="tiny", role="status")
+        _draw_rate_right(img, 63, y, rate, color=rate_col)
     else:
         uptime = str(m.get("uptime_str", "--"))[:8]
         _txt(img, name_x, y, uptime, FG, size="tiny", role="value")
