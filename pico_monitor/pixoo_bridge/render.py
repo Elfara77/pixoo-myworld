@@ -924,14 +924,14 @@ def _greedy_clients(
 
 
 def _top_hostname_color(down_mbps: float, up_mbps: float) -> tuple[int, int, int]:
-    """Green idle; yellow if greedy on one side; red if greedy down and up (streaming)."""
+    """White idle; yellow if greedy on one side; red if greedy down and up (streaming)."""
     greedy_dn = (float(down_mbps) / _WAN_MAX_DOWN_MBPS) >= _GREEDY_UTIL
     greedy_up = (float(up_mbps) / _WAN_MAX_UP_MBPS) >= _GREEDY_UTIL
     if greedy_dn and greedy_up:
         return RED
     if greedy_dn or greedy_up:
         return YELLOW
-    return GREEN
+    return FG
 
 
 def _client_dir_tag(down_mbps: float, up_mbps: float) -> str:
@@ -1212,9 +1212,9 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     x = x0
     x = _txt(img, x, y, "Wi", LABEL, size="tiny", role="label")
     x += 1
-    x = _txt(img, x, y, str(wifi), GREEN, size="tiny", role="status")
+    x = _txt(img, x, y, str(wifi), DIM if wifi == 0 else FG, size="tiny", role="status")
     x = _txt(img, x, y, "/", HEADER, size="tiny", role="status")
-    x = _txt(img, x, y, str(clients), GREEN, size="tiny", role="status")
+    x = _txt(img, x, y, str(clients), DIM if clients == 0 else FG, size="tiny", role="status")
     lan_ink = pf.text_ink_width("LAN1234", size="tiny")
     lx = x1 - lan_ink + 1
     lx = _txt(img, lx, y, "LAN", LABEL, size="tiny", role="label")
@@ -1242,7 +1242,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     # 7) Hot Wifi n …… peak tag (Wi-Fi STA only — wired clients excluded)
     n_hot, hot = _greedy_clients(m, limit=3)
     n_show = min(9, int(n_hot))
-    hot_col = DIM if n_show == 0 else (YELLOW if n_show < 3 else RED)
+    hot_col = DIM if n_show == 0 else FG
     hot_lab = "Hot Wifi"
     _txt(img, x0, y, hot_lab, LABEL, size="tiny", role="label")
     _txt(
