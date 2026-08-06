@@ -92,9 +92,9 @@ _NET_SAT_SMOOTH: float | None = None
 _SYS_HP_HIST: list[float] = []
 _NET_SAT_HIST: list[float] = []
 # SUM dwell D split into 8 equal slots (Σ=D), half/half:
-# Clients (0–3): Hot + 2 tops + SYS/NET + CPU/RAM + DSK/TMP + Wi/LAN + VPN/5G/USB
-# Graph  (4–7): 4-row WAN graph (lines 2–5) + DOWN/UP WiFi|Wired bars (lines 8–9)
-# Always: line1 DWN/UP, lines 6–7 CPU/RAM + DSK/TMP (graph half), footer.
+# Clients (0–3): Hot + 2 tops + Wi/LAN + VPN/5G/USB + SYS/NET + CPU/RAM + DSK/TMP
+# Graph  (4–7): 3-row WAN graph (lines 2–4) + DOWN/UP WiFi|Wired bars (lines 5–6)
+# Always: line1 DWN/UP; lines 7–9 SYS/NET + CPU/RAM + DSK/TMP; footer.
 _SUM_DWELL_T0 = 0.0
 _SUM_DWELL_D = 1.0
 # Latched once per frame in set_sum_dwell — never recompute mid-render.
@@ -518,30 +518,42 @@ def _draw_rate(
     size: str = "tiny",
     alert: bool = False,
     color: Sequence[int] | None = None,
+    unit_gap: int = 1,
 ) -> int:
     num, unit = _split_rate(mbps)
     col = color if color is not None else _rate_display_color(mbps, num, unit)
     return _draw_val_unit(
-        img, x, y, num, unit, col, size=size, value_role="status", alert=alert
+        img,
+        x,
+        y,
+        num,
+        unit,
+        col,
+        size=size,
+        value_role="status",
+        alert=alert,
+        unit_gap=unit_gap,
     )
 
 
-def _rate_pixel_width(mbps: float, *, size: str = "tiny") -> int:
+def _rate_pixel_width(mbps: float, *, size: str = "tiny", unit_gap: int = 1) -> int:
     """Advance width of a rate (includes trailing tiny spacer after unit)."""
     num, unit = _split_rate(mbps)
     w = pf.text_width(num, size=size)
     if unit:
-        w += 1 + pf.text_width(unit, size=size)
+        w += max(0, int(unit_gap)) + pf.text_width(unit, size=size)
     return w
 
 
-def _rate_ink_width(mbps: float, *, size: str = "tiny") -> int:
+def _rate_ink_width(mbps: float, *, size: str = "tiny", unit_gap: int = 1) -> int:
     """Width through last lit pixel of a rate (flush-right)."""
     num, unit = _split_rate(mbps)
     if not unit:
         return pf.text_ink_width(num, size=size)
-    # num advance + 1px gap + unit ink (same structure as _draw_val_unit)
-    return pf.text_width(num, size=size) + 1 + pf.text_ink_width(unit, size=size)
+    # num advance + gap + unit ink (same structure as _draw_val_unit)
+    return pf.text_width(num, size=size) + max(0, int(unit_gap)) + pf.text_ink_width(
+        unit, size=size
+    )
 
 
 def _draw_rate_right(
@@ -552,11 +564,12 @@ def _draw_rate_right(
     *,
     size: str = "tiny",
     color: Sequence[int] | None = None,
+    unit_gap: int = 1,
 ) -> int:
     """Draw rate with last ink on `right` (inclusive). Returns start x."""
-    w = _rate_ink_width(mbps, size=size)
+    w = _rate_ink_width(mbps, size=size, unit_gap=unit_gap)
     x = max(0, right - w + 1)
-    _draw_rate(img, x, y, mbps, size=size, color=color)
+    _draw_rate(img, x, y, mbps, size=size, color=color, unit_gap=unit_gap)
     return x
 
 
@@ -602,16 +615,26 @@ def _draw_val_unit_right(
     size: str = "tiny",
     value_role: str = "status",
     alert: bool = False,
+    unit_gap: int = 1,
 ) -> int:
     """Draw num+unit with last ink on `right`. Returns start x."""
     w = pf.text_width(num, size=size)
     if unit:
-        w += 1 + pf.text_ink_width(unit, size=size)
+        w += max(0, int(unit_gap)) + pf.text_ink_width(unit, size=size)
     else:
         w = pf.text_ink_width(num, size=size)
     x = max(0, right - w + 1)
     _draw_val_unit(
-        img, x, y, num, unit, val_color, size=size, value_role=value_role, alert=alert
+        img,
+        x,
+        y,
+        num,
+        unit,
+        val_color,
+        size=size,
+        value_role=value_role,
+        alert=alert,
+        unit_gap=unit_gap,
     )
     return x
 
@@ -640,6 +663,7 @@ def _draw_val_unit(
     unit_size: str | None = None,
     value_role: str = "value",
     alert: bool = False,
+    unit_gap: int = 1,
 ) -> int:
     x = _txt(img, x, y, num, val_color, size=size, role=value_role, alert=alert)
     if unit:
@@ -649,7 +673,7 @@ def _draw_val_unit(
             y_off = 1
         u_role = "status" if value_role == "status" else "unit"
         u_col = val_color if u_role == "status" else UNIT
-        x = _txt(img, x + 1, y + y_off, unit, u_col, size=us, role=u_role)
+        x = _txt(img, x + max(0, int(unit_gap)), y + y_off, unit, u_col, size=us, role=u_role)
     return x
 
 
@@ -1010,9 +1034,214 @@ def _first_top(rows: list | None) -> tuple[str, float] | None:
         return None
     try:
         row = rows[0]
+        if isinstance(row, dict):
+            name = str(row.get("name") or row.get("mac") or "?")
+            return name, max(0.0, float(row.get("rate") or 0))
         return str(row[0]), max(0.0, float(row[1]))
-    except (IndexError, TypeError, ValueError):
+    except (IndexError, TypeError, ValueError, KeyError):
         return None
+
+
+# Hot-line spike detection (SUM clients half).
+_HOT_BASELINE_N = 10
+_HOT_THRESH_MBPS = 10.0  # real spike
+_HOT_CLIENT_SHARE = 0.5  # top1 must cover ≥50% of surplus to be "the" culprit
+_HOT_MULTI_CLIENT_MBPS = 5.0  # count clients above this for multi line
+_HOT_LAN_DOMINATES = 0.3  # wifi surplus < lan * this → LAN-solo
+
+
+def format_hot_bitrate(mbps: float) -> str:
+    """Compact rate for Hot line: ``68M``, ``1G`` (no space)."""
+    v = max(0.0, float(mbps or 0))
+    if v <= 0:
+        return "0K"
+    kb = v * 1000.0
+    if kb <= 999:
+        return f"{int(round(kb))}K"
+    if v <= 999:
+        return f"{int(round(v))}M"
+    g = v / 1000.0
+    if g <= 999:
+        # One decimal under 10G reads better on 64px.
+        if g < 10:
+            return f"{g:.1f}".rstrip("0").rstrip(".") + "G"
+        return f"{int(round(g))}G"
+    t = g / 1000.0
+    return f"{max(1, int(round(t)))}T"
+
+
+def _hot_baseline(history: Any, *, n: int = _HOT_BASELINE_N) -> float | None:
+    """Mean of last ``n`` samples excluding the newest (current) point."""
+    try:
+        vals = [float(x) for x in (history or [])]
+    except (TypeError, ValueError):
+        return None
+    if len(vals) < 3:
+        return None
+    prior = vals[:-1]
+    window = prior[-max(1, int(n)) :]
+    if not window:
+        return None
+    return sum(window) / len(window)
+
+
+def _hot_surplus(history: Any, current: float | None, *, n: int = _HOT_BASELINE_N) -> float:
+    """``max(0, current - baseline)``; 0 if baseline unknown."""
+    try:
+        vals = [float(x) for x in (history or [])]
+    except (TypeError, ValueError):
+        vals = []
+    if current is None:
+        current = vals[-1] if vals else 0.0
+    else:
+        current = float(current or 0)
+    base = _hot_baseline(vals if vals else [current], n=n)
+    if base is None:
+        return 0.0
+    return max(0.0, current - base)
+
+
+def _hot_best_side(
+    hist_down: Any,
+    hist_up: Any,
+    cur_down: float,
+    cur_up: float,
+) -> tuple[float, str, float]:
+    """Return (surplus, 'D'|'U', current_on_that_side)."""
+    sd = _hot_surplus(hist_down, cur_down)
+    su = _hot_surplus(hist_up, cur_up)
+    if sd >= su:
+        return sd, "D", float(cur_down or 0)
+    return su, "U", float(cur_up or 0)
+
+
+def _hot_parse_tops(rows: Any, *, typ: str | None = "wifi") -> list[tuple[str, float]]:
+    """Normalize top_* rows → (name, Mbps). Existing tuples are WiFi STA."""
+    out: list[tuple[str, float]] = []
+    for row in rows or []:
+        try:
+            if isinstance(row, dict):
+                row_typ = str(row.get("type") or "wifi").lower()
+                if typ and row_typ != typ:
+                    continue
+                name = str(row.get("name") or row.get("mac") or "?").strip() or "?"
+                rate = max(0.0, float(row.get("rate") or 0))
+            else:
+                if typ and typ not in ("wifi", None):
+                    # Legacy [name, rate] lists are WiFi-only from Merlin.
+                    continue
+                name = str(row[0]).strip() or "?"
+                rate = max(0.0, float(row[1]))
+            out.append((name, rate))
+        except (IndexError, TypeError, ValueError, KeyError):
+            continue
+    out.sort(key=lambda x: x[1], reverse=True)
+    return out
+
+
+def compute_hot_label(m: dict[str, Any]) -> str:
+    """Spike-above-baseline Hot line for SUM (WiFi / LAN / mix / multi / idle).
+
+    Uses existing ``wifi_*`` / ``lan_*`` histories + ``top_down``/``top_up``
+    (WiFi STA today; dicts with ``type`` accepted if present later).
+    """
+    wifi_d = float(m.get("wifi_down", 0) or 0)
+    wifi_u = float(m.get("wifi_up", 0) or 0)
+    lan_d = float(m.get("lan_down", 0) or 0)
+    lan_u = float(m.get("lan_up", 0) or 0)
+
+    w_sur, w_dir, w_cur = _hot_best_side(
+        m.get("wifi_history_down"),
+        m.get("wifi_history_up"),
+        wifi_d,
+        wifi_u,
+    )
+    l_sur, l_dir, l_cur = _hot_best_side(
+        m.get("lan_history_down"),
+        m.get("lan_history_up"),
+        lan_d,
+        lan_u,
+    )
+
+    tops = _hot_parse_tops(
+        m.get("top_down") if w_dir == "D" else m.get("top_up"),
+        typ="wifi",
+    )
+    top1_name, top1_rate = (tops[0] if tops else ("", 0.0))
+    n_hot = sum(1 for _n, r in tops if r >= _HOT_MULTI_CLIENT_MBPS)
+
+    w_hot = w_sur >= _HOT_THRESH_MBPS
+    l_hot = l_sur >= _HOT_THRESH_MBPS
+    w_rate_s = format_hot_bitrate(w_cur if w_cur > 0 else w_sur)
+    l_rate_s = format_hot_bitrate(l_cur if l_cur > 0 else l_sur)
+
+    # 1) WiFi solo — one STA covers ≥50% of the WiFi surplus
+    if w_hot and top1_rate >= w_sur * _HOT_CLIENT_SHARE:
+        name = (top1_name or "").strip()
+        rate_s = format_hot_bitrate(top1_rate)
+        if name and name not in ("?", "-", "--"):
+            return f"Hot {name} {rate_s} {w_dir}"
+        return f"Hot WiFi {rate_s} {w_dir}"
+
+    # 2) LAN solo — LAN spike dominates, WiFi quiet relative to it
+    if l_hot and (not w_hot or w_sur < l_sur * _HOT_LAN_DOMINATES):
+        return f"Hot LAN {l_rate_s} {l_dir}"
+
+    # 3) Mixed WiFi + LAN
+    if w_hot and l_hot:
+        return f"Hot WiFi {w_rate_s} {w_dir} + LAN {l_rate_s} {l_dir}"
+
+    # 4) WiFi spike shared across several STAs
+    if w_hot and top1_rate < w_sur * _HOT_CLIENT_SHARE:
+        n = max(2, n_hot) if n_hot >= 2 else (n_hot if n_hot > 0 else 0)
+        if n >= 2:
+            return f"Hot WiFi {n} clients"
+        # Anonymous WiFi spike (no / weak top attribution)
+        return f"Hot WiFi {w_rate_s} {w_dir}"
+
+    # 5) Idle
+    return "Hot --"
+
+
+def _fit_hot_label(text: str, max_w: int) -> str:
+    """Shrink Hot label to ``max_w`` px (tiny), preferring to drop hostname first."""
+    if max_w <= 0:
+        return ""
+    if pf.text_ink_width(text, size="tiny") <= max_w:
+        return text
+    # Mixed → compact
+    if " + LAN " in text and text.startswith("Hot WiFi "):
+        # Hot WiFi 32M D + LAN 23M D → Hot W32MD+L23MD
+        compact = (
+            text.replace("Hot WiFi ", "Hot W")
+            .replace(" + LAN ", "+L")
+            .replace(" D", "D")
+            .replace(" U", "U")
+        )
+        if pf.text_ink_width(compact, size="tiny") <= max_w:
+            return compact
+        text = compact
+    # Named → drop name: "Hot Name 68M D" → "Hot WiFi 68M D"
+    parts = text.split()
+    if len(parts) >= 4 and parts[0] == "Hot" and parts[1] not in ("WiFi", "LAN", "--"):
+        # Hot <name...> <rate> <D|U>
+        alt = f"Hot WiFi {parts[-2]} {parts[-1]}"
+        if pf.text_ink_width(alt, size="tiny") <= max_w:
+            return alt
+        text = alt
+    # Truncate from the end / middle hostname already gone
+    while text and pf.text_ink_width(text, size="tiny") > max_w:
+        text = text[:-1]
+    return text
+
+
+def _draw_sum_hot_row(img, m: dict[str, Any], *, x0: int, x1: int, y: int) -> None:
+    """SUM line 2 (clients half): spike-above-baseline Hot label."""
+    raw = compute_hot_label(m)
+    shown = _fit_hot_label(raw, x1 - x0 + 1)
+    idle = shown.rstrip().endswith("--") or shown.strip() == "Hot"
+    col = DIM if idle else FG
+    _txt(img, x0, y, shown, col, size="tiny", role="status")
 
 
 def _draw_sum_top_client_line(
@@ -1545,7 +1774,7 @@ def _draw_sum_wi_lan_row(
 
 
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """SUM layout (9 content rows + footer), graph half swaps lines 2–5 and 8–9."""
+    """SUM layout (9 content rows + footer), graph half swaps lines 2–4 and 5–6."""
     sys_hp = _system_health_score(m)
     net_sat = _network_saturation(m)
     sys_col = _sys_health_color(sys_hp)
@@ -1557,16 +1786,12 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     lab_w = pf.text_width("SYS", size="tiny")
     lab_l = x0
     trend_w = pf.text_width("↑", size="tiny")
-    tmp_val_max = (
-        pf.text_width("100", size="tiny") + 1 + pf.text_ink_width("°C", size="tiny")
-    )
-    lab_r = x1 - (lab_w + trend_w + 2 + tmp_val_max) + 1
-    content_l = lab_l + lab_w + trend_w
-    content_r = lab_r + lab_w + trend_w
-    g_l = content_l
-    g_w_l = max(4, lab_r - g_l - 1)
-    g_r = content_r
-    g_w_r = max(4, x1 - g_r + 1)
+    # Equal SYS/NET + CPU/RAM gauges: mirrored halves around mid.
+    mid = 32
+    g_l = lab_l + lab_w + trend_w
+    lab_r = mid + 1
+    g_r = lab_r + lab_w + trend_w
+    g_w = max(4, min((mid - 1) - g_l + 1, x1 - g_r + 1))
     step = 6  # 5px tiny glyph + 1px row gap
     footer_y0 = 64 - 7
     y = 0
@@ -1598,17 +1823,22 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     tr_dn = _trend_from_history(m.get("wan_history_down"), eps_abs=0.05)
     tr_up = _trend_from_history(m.get("wan_history_up"), eps_abs=0.02)
     x = _draw_sum_inv_lab(img, d, x0, y, "DWN", GRAPH_DOWN)
+    x += 1  # trend arrow 1px toward the rate/graph
     x = _draw_trend(img, x, y, tr_dn)
-    x += 1
+    # No gap after arrow — rate glued to trend (frees 1px for UP).
     _draw_rate(img, x, y, down, color=down_col)
+    # Fixed UP badge: reserve trend slot + max rate; +2px vs prior (no post-arrow gaps).
     up_badge_w = max(1, pf.text_ink_width("UP", size="tiny")) + 2
-    up_rate_w = _rate_ink_width(up)
-    tr_up_w = pf.text_width(tr_up, size="tiny") if tr_up else 0
-    ux = x1 - (up_badge_w + tr_up_w + 1 + up_rate_w) + 1
-    ux = _draw_sum_inv_lab(img, d, ux, y, "UP", GRAPH_UP)
-    ux = _draw_trend(img, ux, y, tr_up)
-    ux += 1
-    _draw_rate(img, ux, y, up, color=up_col)
+    max_up_rate_w = (
+        pf.text_width("999", size="tiny") + 1 + pf.text_ink_width("M", size="tiny")
+    )
+    # badge|+1 arrow|trend|rate — no 1px after arrows (gains 2px → UP further right).
+    up_x = x1 - (up_badge_w + 1 + trend_w + max_up_rate_w) + 2
+    ux = _draw_sum_inv_lab(img, d, up_x, y, "UP", GRAPH_UP)
+    ux += 1  # trend arrow 1px toward the rate/graph
+    _draw_trend(img, ux, y, tr_up)
+    # Rate flush-right; glue last digit to unit (−1px gap vs DWN).
+    _draw_rate_right(img, x1, y, up, color=up_col, unit_gap=0)
     y += step
 
     show_wan_graph = sum_show_wan_graph()
@@ -1617,10 +1847,11 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
     disk = _disk_used_pct(m)
 
+    y += 1  # line 2 starts 1px lower
     if show_wan_graph:
-        # 2–5) WAN graph over 4 rows (replaces Hot + tops + SYS/NET)
-        graph_rows = 4
-        graph_h = graph_rows * step - 1  # 23px
+        # 2–4) WAN graph over 3 rows (replaces Hot + 2 tops)
+        graph_rows = 3
+        graph_h = graph_rows * step - 1  # 17px
         down_h = list(m.get("wan_history_down") or [])[-64:]
         up_h = list(m.get("wan_history_up") or [])[-64:]
         _graph_up_down(
@@ -1639,34 +1870,8 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         )
         y += graph_rows * step
     else:
-        # 2) Hot Wifi n …… down_rate up_rate
-        n_hot, hot = _greedy_clients(m, limit=3)
-        n_show = min(9, int(n_hot))
-        hot_col = DIM if n_show == 0 else FG
-        hot_lab = "Hot Wifi"
-        _txt(img, x0, y, hot_lab, LABEL, size="tiny", role="label")
-        _txt(
-            img,
-            x0 + pf.text_width(hot_lab, size="tiny") + 2,
-            y,
-            str(n_show),
-            hot_col,
-            size="tiny",
-            role="status",
-        )
-        if hot:
-            _hn, hd, hu, _hutil = hot[0]
-            up_w = _rate_ink_width(hu)
-            _draw_rate_right(img, x1, y, hu, color=_wan_link_color(hu, _WAN_MAX_UP_MBPS))
-            _draw_rate_right(
-                img,
-                x1 - up_w - 2,
-                y,
-                hd,
-                color=_wan_link_color(hd, _WAN_MAX_DOWN_MBPS),
-            )
-        else:
-            _txt(img, _right_x("--"), y, "--", DIM, size="tiny", role="status")
+        # 2) Hot — spike above WiFi/LAN baseline (who eats the surplus)
+        _draw_sum_hot_row(img, m, x0=x0, x1=x1, y=y)
         y += step
 
         # 3–4) #1 top_down + D, then #1 top_up + U (tag after unit)
@@ -1674,25 +1879,35 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             img, m, x0=x0, x1=x1, y=y, step=step, footer_y0=footer_y0
         )
 
-        # 5) SYS/NET gauges
-        tr_sys = _trend_from_history(_SYS_HP_HIST, eps_abs=1.0, eps_ratio=0.02)
-        tr_net = _trend_from_history(_NET_SAT_HIST, eps_abs=1.0, eps_ratio=0.02)
-        _label_trend_gauge(lab_l, "SYS", tr_sys, sys_hp, sys_col, alert=False, g_x0=g_l, g_w0=g_w_l)
-        _label_trend_gauge(lab_r, "NET", tr_net, net_sat, net_col, alert=False, g_x0=g_r, g_w0=g_w_r)
+    # 5–6) Under graph: DOWN/UP WiFi|Wired balances | Clients: Wi/LAN + VPN/5G/USB
+    y += 1  # balances / Wi·VPN 1px lower
+    if show_wan_graph:
+        y = _draw_sum_down_up_split_gauges(img, d, m, x0=x0, x1=x1, y=y, step=step)
+    else:
+        _draw_sum_wi_lan_row(img, d, m, x0=x0, x1=x1, y=y)
+        y += step
+        _draw_sum_vpn_usb_row(img, d, m, x0=x0, x1=x1, y=y)
         y += step
 
-    # 6) CPU/RAM — always
+    # 7) SYS/NET
+    tr_sys = _trend_from_history(_SYS_HP_HIST, eps_abs=1.0, eps_ratio=0.02)
+    tr_net = _trend_from_history(_NET_SAT_HIST, eps_abs=1.0, eps_ratio=0.02)
+    _label_trend_gauge(lab_l, "SYS", tr_sys, sys_hp, sys_col, alert=False, g_x0=g_l, g_w0=g_w)
+    _label_trend_gauge(lab_r, "NET", tr_net, net_sat, net_col, alert=False, g_x0=g_r, g_w0=g_w)
+    y += step
+
+    # 8) CPU/RAM
     cpu_col = _diagram_color(cpu, kind="load")
     ram_col = _diagram_color(ram, kind="load")
     cpu_alert = _is_crit_load(cpu)
     ram_alert = _is_crit_load(ram)
     tr_cpu = _trend_from_history(m.get("cpu_history"), eps_abs=1.0, eps_ratio=0.02)
     tr_ram = _trend_from_history(m.get("ram_history"), eps_abs=1.0, eps_ratio=0.02)
-    _label_trend_gauge(lab_l, "CPU", tr_cpu, cpu, cpu_col, alert=cpu_alert, g_x0=g_l, g_w0=g_w_l)
-    _label_trend_gauge(lab_r, "RAM", tr_ram, ram, ram_col, alert=ram_alert, g_x0=g_r, g_w0=g_w_r)
+    _label_trend_gauge(lab_l, "CPU", tr_cpu, cpu, cpu_col, alert=cpu_alert, g_x0=g_l, g_w0=g_w)
+    _label_trend_gauge(lab_r, "RAM", tr_ram, ram, ram_col, alert=ram_alert, g_x0=g_r, g_w0=g_w)
     y += step
 
-    # 7) DSK/TMP — always
+    # 9) DSK/TMP — DSK +3px gap; TMP aligned with RAM; °C flush-right
     dsk_col = _diagram_color(disk, kind="disk")
     tmp_i = int(round(tmp))
     tmp_hot = _is_crit_temp_tile(tmp_i)
@@ -1700,7 +1915,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _txt(img, lab_l, y, "DSK", LABEL, size="tiny", role="label", alert=_is_crit_disk_tile(disk))
     _draw_val_unit(
         img,
-        lab_l + lab_w + 2,
+        lab_l + lab_w + 5,  # was +2; +3px more gap after DSK
         y,
         str(int(round(disk))),
         "%",
@@ -1711,29 +1926,40 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     )
     tr_tmp = _trend_from_history(m.get("temp_history"), eps_abs=0.5, eps_ratio=0.01)
     tmp_num = str(tmp_i)
+    # Prefer °C glued to digits (gap 0) so TMP can sit on the RAM column.
+    tmp_unit_gap = 0
+    vu_w = (
+        pf.text_width(tmp_num, size="tiny")
+        + tmp_unit_gap
+        + pf.text_ink_width("°C", size="tiny")
+    )
+    # [TMP][trend][flex][nn°C] — try TMP @ lab_r (RAM); pull left only if 100°C+arrow.
+    tr_slot = trend_w if tr_tmp else 0
+    need = lab_w + tr_slot + vu_w
+    tmp_lab_x = lab_r if (lab_r + need - 1) <= x1 else max(0, x1 - need + 1)
     bx = _txt(
         img,
-        lab_r,
+        tmp_lab_x,
         y,
         "TMP",
         RED if tmp_hot else LABEL,
         size="tiny",
         role="status" if tmp_hot else "label",
     )
-    bx = _draw_trend(img, bx, y, tr_tmp)
-    bx = max(bx, content_r)
-    bx += 2
-    _draw_val_unit(img, bx, y, tmp_num, "°C", tmp_col, size="tiny", value_role="status")
-    y += step
-
-    # 8–9) Graph half: DOWN/UP WiFi|Wired balances | Clients: Wi/LAN + VPN/5G/USB
-    if show_wan_graph:
-        y = _draw_sum_down_up_split_gauges(img, d, m, x0=x0, x1=x1, y=y, step=step)
-    else:
-        _draw_sum_wi_lan_row(img, d, m, x0=x0, x1=x1, y=y)
-        y += step
-        if y + 4 < footer_y0:
-            _draw_sum_vpn_usb_row(img, d, m, x0=x0, x1=x1, y=y)
+    if tr_tmp:
+        bx = _draw_trend(img, bx, y, tr_tmp)
+    # Remaining slack sits between arrow and value; value+°C flush to right edge.
+    _draw_val_unit_right(
+        img,
+        x1,
+        y,
+        tmp_num,
+        "°C",
+        tmp_col,
+        size="tiny",
+        value_role="status",
+        unit_gap=tmp_unit_gap,
+    )
 
     # Footer: time | uptime/WAN | date
     _draw_sum_footer(img, d, m)
