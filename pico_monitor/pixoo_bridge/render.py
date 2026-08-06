@@ -1013,29 +1013,49 @@ def _score_hist_push(buf: list[float], val: float, *, keep: int = 4) -> None:
     del buf[:-keep]
 
 
-def _draw_inverted_chip(
-    img,
-    draw: ImageDraw.ImageDraw,
-    x: int,
-    y: int,
-    text: str,
-    accent: tuple[int, int, int],
-    *,
-    h: int = 5,
-    pad: int = 1,
-) -> int:
-    """Black text on accent fill/outline (padded chip); returns x after chip."""
-    if not text:
-        return x
-    ink = max(1, pf.text_ink_width(text, size="tiny"))
-    adv = pf.text_width(text, size="tiny")
-    x0 = max(0, x - pad)
-    x1 = min(63, x + ink - 1 + pad)
-    y1 = min(63, y + h - 1)
-    draw.rectangle([x0, y, x1, y1], fill=accent, outline=accent)
-    # Pure black so strokes stay distinct from screen BG holes outside the chip.
-    pf.draw_tiny(img, x, y, text, (0, 0, 0))
-    return x + adv
+def _draw_sum_footer(img, draw: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
+    """Bottom 7px band (1+5+1): continuous accent fill, black 3×5 with 1px margins."""
+    from datetime import datetime
+
+    band_h = 7  # 1px top + 5px glyph + 1px bottom
+    band_y0 = 64 - band_h  # 57 — flush to bottom edge
+    text_y = band_y0 + 1
+    margin = 1
+    x_right = 63
+
+    now = datetime.now()
+    time_s = now.strftime("%H:%M")
+    date_s = now.strftime("%d/%m")
+    online = bool(m.get("wan_online"))
+    mid = "WAN" if not online else str(m.get("uptime_str", "--") or "--")
+
+    time_ink = max(1, pf.text_ink_width(time_s, size="tiny"))
+    date_ink = max(1, pf.text_ink_width(date_s, size="tiny"))
+    time_x = margin
+    # Date last ink on x=62 → 1px right margin on column 63
+    date_x = x_right - margin - date_ink + 1
+
+    # Continuous band: white full width, then mid accent over the center span.
+    draw.rectangle([0, band_y0, x_right, 63], fill=FG, outline=FG)
+    # 1px white pad after time ink, 1px white pad before date ink; mid fills the rest.
+    mid_x0 = time_x + time_ink + 1
+    mid_x1 = date_x - 2
+    mid_col = GREEN if online else RED
+    if mid_x1 >= mid_x0:
+        draw.rectangle([mid_x0, band_y0, mid_x1, 63], fill=mid_col, outline=mid_col)
+
+    # Mid text: 1px into the mid accent (glyph bordered by accent on all sides).
+    mid_text_x = mid_x0 + 1
+    avail = max(0, (date_x - 1) - mid_text_x)
+    while mid and pf.text_width(mid, size="tiny") > avail:
+        mid = mid[:-1]
+
+    black = (0, 0, 0)
+    pf.draw_tiny(img, time_x, text_y, time_s, black)
+    show_mid = bool(mid) and (online or not _ALERT_BLINK or _blink_on())
+    if show_mid:
+        pf.draw_tiny(img, mid_text_x, text_y, mid, black)
+    pf.draw_tiny(img, date_x, text_y, date_s, black)
 
 
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
@@ -1228,11 +1248,12 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         _txt(img, _right_x("--"), y, "--", DIM, size="tiny", role="status")
     y += step
 
-    # 8) Two top-client rows under Hot
+    # 8) Two top-client rows under Hot (stop before bottom 7px footer band)
     tops = _rank_clients_by_wan_util(m)[:2]
     tag_cols = {"D": GRAPH_DOWN, "U": ORANGE, "B": RED}
+    footer_y0 = 64 - 7
     for i in range(2):
-        if y > 52:
+        if y + 4 >= footer_y0:
             break
         if i >= len(tops):
             _txt(img, x0, y, "-", DIM, size="tiny", role="status")
@@ -1252,43 +1273,8 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         _draw_rate_right(img, x1, y, rate, color=rate_col)
         y += step
 
-    # 9) Footer: inverted chips — time (white) · uptime(green)|WAN(red blink) · date (white, right)
-    if y > 58:
-        return
-    from datetime import datetime
-
-    now = datetime.now()
-    time_s = now.strftime("%H:%M")
-    date_s = now.strftime("%d/%m")
-    online = bool(m.get("wan_online"))
-    mid = "WAN" if not online else str(m.get("uptime_str", "--") or "--")
-    # Fit middle between time and right-aligned date (account for 1px chip pads + gaps).
-    pad = 1
-    gap = 1
-    time_ink = pf.text_ink_width(time_s, size="tiny")
-    date_ink = pf.text_ink_width(date_s, size="tiny")
-    date_x = x1 - date_ink + 1
-    # time chip occupies [0..time_ink+pad], then gap, then mid, then gap before date chip pad.
-    mid_x = time_ink + pad + gap + pad
-    mid_right = date_x - pad - gap
-    avail = max(0, mid_right - mid_x + 1)
-    while mid and pf.text_width(mid, size="tiny") > avail:
-        mid = mid[:-1]
-
-    # Full-height footer band so black glyphs sit on solid accent (not screen BG).
-    band_h = max(5, 64 - y)
-    _draw_inverted_chip(img, d, x0 + pad, y, time_s, FG, h=band_h, pad=pad)
-    show_mid = bool(mid) and (online or not _ALERT_BLINK or _blink_on())
-    if show_mid:
-        _draw_inverted_chip(
-            img, d, mid_x, y, mid, GREEN if online else RED, h=band_h, pad=pad
-        )
-    else:
-        # Keep the middle band colored even while WAN blink is off.
-        if mid and not online:
-            mx1 = min(63, mid_x + max(1, pf.text_ink_width(mid, size="tiny")) - 1 + pad)
-            d.rectangle([mid_x - pad, y, mx1, min(63, y + band_h - 1)], fill=RED, outline=RED)
-    _draw_inverted_chip(img, d, date_x, y, date_s, FG, h=band_h, pad=pad)
+    # 9) Footer pinned to bottom: continuous 7px inverted band
+    _draw_sum_footer(img, d, m)
 
 
 def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
