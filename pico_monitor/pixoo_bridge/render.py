@@ -532,18 +532,23 @@ def _draw_rate_dir_tag_right(
     y: int,
     mbps: float,
     tag: str,
-    tag_color: Sequence[int],
+    tag_col: Sequence[int],
     *,
     size: str = "tiny",
     rate_color: Sequence[int] | None = None,
+    min_x: int = 0,
 ) -> int:
     """Draw rate then direction tag (U/D) flush-right. Returns rate start x."""
     tag_ink = pf.text_ink_width(tag, size=size)
     tag_x = max(0, right - tag_ink + 1)
-    rate_right = tag_x - 2  # 1px gap before tag
-    rx = _draw_rate_right(img, rate_right, y, mbps, size=size, color=rate_color)
-    _txt(img, tag_x, y, tag, tag_color, size=size, role="status")
-    return rx
+    rate_w = _rate_ink_width(mbps, size=size)
+    # Keep rate entirely to the right of min_x (hostname column).
+    rate_right = tag_x - 2
+    rate_x = max(int(min_x), rate_right - rate_w + 1)
+    if rate_x <= rate_right:
+        _draw_rate(img, rate_x, y, mbps, size=size, color=rate_color)
+    _txt(img, tag_x, y, tag, tag_col, size=size, role="status")
+    return rate_x
 
 
 def _draw_val_unit_right(
@@ -961,6 +966,68 @@ def _first_top(rows: list | None) -> tuple[str, float] | None:
         return str(row[0]), max(0.0, float(row[1]))
     except (IndexError, TypeError, ValueError):
         return None
+
+
+def _draw_sum_top_client_line(
+    img,
+    x0: int,
+    x1: int,
+    y: int,
+    name: str,
+    rate: float,
+    tag: str,
+    tag_col: Sequence[int],
+) -> None:
+    """Hostname left + rate+U/D right only (never a U/D prefix before the name)."""
+    host = str(name or "").strip()
+    # Drop accidental leading direction crumbs (legacy layout / bad leases).
+    while host and host[0] in "UD" and (len(host) == 1 or host[1] in " .:_-\t"):
+        host = host[1:].lstrip(" .:_-\t")
+    if not host:
+        host = "-"
+    trail_w = _rate_dir_tag_ink_width(rate, tag)
+    # Hard reserve on the right so rate+tag cannot collide into the name column.
+    max_name_w = max(0, x1 - trail_w - 2 - x0 + 1)
+    shown = _truncate_to_width(host, max_name_w)
+    _txt(img, x0, y, shown, FG if rate > 0 else DIM, size="tiny", role="status")
+    name_end = x0 + pf.text_width(shown, size="tiny")
+    _draw_rate_dir_tag_right(
+        img,
+        x1,
+        y,
+        rate,
+        tag,
+        tag_col,
+        rate_color=FG if rate > 0 else DIM,
+        min_x=name_end + 1,
+    )
+
+
+def _draw_sum_top_clients_rows(
+    img,
+    m: dict[str, Any],
+    *,
+    x0: int,
+    x1: int,
+    y: int,
+    step: int,
+    footer_y0: int,
+) -> int:
+    """Always: line1 = #1 top_up + U; line2 = #1 top_down + D. Returns y after rows."""
+    for entry, tag, tag_col in (
+        (_first_top(m.get("top_up")), "U", ORANGE),
+        (_first_top(m.get("top_down")), "D", GREEN),
+    ):
+        if y + 4 >= footer_y0:
+            break
+        if not entry:
+            _txt(img, x0, y, "-", DIM, size="tiny", role="status")
+            y += step
+            continue
+        name, rate = entry
+        _draw_sum_top_client_line(img, x0, x1, y, name, rate, tag, tag_col)
+        y += step
+    return y
 
 
 def _pick_top(rows: list | None, limit: int = 2) -> list[tuple[str, float]]:
@@ -1568,10 +1635,13 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         _draw_sum_vpn_usb_row(img, d, m, x0=x0, x1=x1, y=y)
     y += step
 
-    # 7–8) Hot Wifi + tops  XOR  WAN graph — graph = last 4/8 of dwell D.
+    # 7–8) One status/graph row, then 2 top-client rows for the whole SUM dwell.
+    # Tops always: #1 top_up + U, #1 top_down + D (hostname | rate+tag only).
+    footer_y0 = 64 - 7
     block_y0 = y
-    block_h = step * 3 - 1  # 17px — three tiny rows
     if show_wan_graph:
+        # Sparkline row under DOWN|UP legend; tops keep the next two rows.
+        graph_h = step - 1  # 5px — one tiny row
         down_h = list(m.get("wan_history_down") or [])[-64:]
         up_h = list(m.get("wan_history_up") or [])[-64:]
         _graph_up_down(
@@ -1580,7 +1650,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             x0,
             block_y0,
             64,
-            block_h,
+            graph_h,
             down_h,
             up_h,
             GRAPH_DOWN,
@@ -1588,7 +1658,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             fill_down=True,
             scale_key="sum_wan",
         )
-        y = block_y0 + step * 3
+        y = block_y0 + step
     else:
         # Hot Wifi n …… down_rate up_rate (hottest Wi‑Fi STA)
         n_hot, hot = _greedy_clients(m, limit=3)
@@ -1620,34 +1690,9 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             _txt(img, _right_x("--"), y, "--", DIM, size="tiny", role="status")
         y += step
 
-        # Line 1 = #1 top_up + unit + orange U; line 2 = #1 top_down + unit + green D
-        footer_y0 = 64 - 7
-        for entry, tag, tag_col in (
-            (_first_top(m.get("top_up")), "U", ORANGE),
-            (_first_top(m.get("top_down")), "D", GREEN),
-        ):
-            if y + 4 >= footer_y0:
-                break
-            if not entry:
-                _txt(img, x0, y, "-", DIM, size="tiny", role="status")
-                y += step
-                continue
-            name, rate = entry
-            trail_w = _rate_dir_tag_ink_width(rate, tag)
-            max_name_w = max(0, x1 - trail_w - 2 - x0 + 1)
-            shown = _truncate_to_width(str(name), max_name_w)
-            _txt(img, x0, y, shown, FG if rate > 0 else DIM, size="tiny", role="status")
-            # Rate (num+K/M/G) in white; only U/D carries direction color.
-            _draw_rate_dir_tag_right(
-                img,
-                x1,
-                y,
-                rate,
-                tag,
-                tag_col,
-                rate_color=FG if rate > 0 else DIM,
-            )
-            y += step
+    y = _draw_sum_top_clients_rows(
+        img, m, x0=x0, x1=x1, y=y, step=step, footer_y0=footer_y0
+    )
 
     # 9) Footer pinned to bottom: continuous 7px inverted band
     _draw_sum_footer(img, d, m)
