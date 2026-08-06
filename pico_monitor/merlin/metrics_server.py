@@ -566,8 +566,8 @@ def _vpn() -> tuple[dict, dict, dict]:
     return {"on": on1, "type": "OVPN"}, {"on": on2, "type": t2}, {"on": on3, "type": t3}
 
 
-def _top_clients_wifi(now: float) -> tuple[list, list]:
-    """Best-effort top down/up from wl sta_info (capped). Rates in Mbps."""
+def _top_clients_wifi(now: float) -> tuple[list, list, float, float]:
+    """Top WiFi STA down/up + total STA Mbps (for CTF wifi/lan reconcile)."""
     rates = []
     n = 0
     # Radios + guest VIFs (eth6/eth7 and wl0.1…); fall back to a fixed list.
@@ -582,7 +582,7 @@ def _top_clients_wifi(now: float) -> tuple[list, list]:
             ml = mac.lower()
             if ml in seen_mac:
                 continue
-            if n >= 12:
+            if n >= 16:
                 break
             seen_mac.add(ml)
             n += 1
@@ -614,12 +614,52 @@ def _top_clients_wifi(now: float) -> tuple[list, list]:
             # Prefer hostname from DHCP lease if available
             short = _lease_name(mac) or ("." + mac.replace(":", "")[-4:])
             rates.append((short, down_kbps, up_kbps))
+    sta_down = sum(d for _n, d, _u in rates) / 1000.0
+    sta_up = sum(u for _n, _d, u in rates) / 1000.0
     downs = sorted(rates, key=lambda x: x[1], reverse=True)[:4]
     ups = sorted(rates, key=lambda x: x[2], reverse=True)[:4]
     return (
         [(n, round(d / 1000.0, 2)) for n, d, _u in downs],
         [(n, round(u / 1000.0, 2)) for n, _d, u in ups],
+        sta_down,
+        sta_up,
     )
+
+
+def _reconcile_wifi_lan_rates(
+    wifi_down: float,
+    wifi_up: float,
+    lan_down: float,
+    lan_up: float,
+    sta_down: float,
+    sta_up: float,
+    wan_down: float,
+    wan_up: float,
+) -> tuple[float, float, float, float]:
+    """Re-attribute CTF-offloaded WiFi traffic counted on switch LAN ports.
+
+    With Broadcom CTF, radio ``eth*`` counters often stay near 0 while
+    ``wl sta_info`` and a LAN port (eth3/eth4) both show the STA download.
+    Move the STA surplus from ``lan_*`` back to ``wifi_*``.
+    """
+    wd, wu = float(wifi_down or 0), float(wifi_up or 0)
+    ld, lu = float(lan_down or 0), float(lan_up or 0)
+    sd, su = max(0.0, float(sta_down or 0)), max(0.0, float(sta_up or 0))
+    phantom_d = max(0.0, sd - wd)
+    phantom_u = max(0.0, su - wu)
+    # Need a clear STA signal — avoids tiny jitter moving buckets.
+    if phantom_d >= 5.0 or phantom_u >= 2.0:
+        wd += phantom_d
+        wu += phantom_u
+        ld = max(0.0, ld - phantom_d)
+        lu = max(0.0, lu - phantom_u)
+    # Keep wifi from wildly exceeding WAN (clock skew / sampling).
+    wan_d, wan_u = float(wan_down or 0), float(wan_up or 0)
+    if wan_d > 1.0:
+        wd = min(wd, wan_d * 1.2 + 5.0)
+    if wan_u > 0.5:
+        wu = min(wu, wan_u * 1.2 + 2.0)
+    return wd, wu, ld, lu
 
 
 def _lease_name(mac: str) -> str | None:
@@ -681,6 +721,18 @@ def collect() -> dict:
     wrx, wtx = _sum_ifaces_bytes(wifi_ifaces)
     wifi_down, wifi_up, _prev_wifi = _rate_from_prev(_prev_wifi, now, wrx, wtx)
     lan_down, lan_up, _ = _wired_rates(now, wifi_down, wifi_up, wired_ifaces)
+    # STA rates before hist append — CTF often parks WiFi bytes on LAN ports.
+    top_d, top_u, sta_down, sta_up = _top_clients_wifi(now)
+    wifi_down, wifi_up, lan_down, lan_up = _reconcile_wifi_lan_rates(
+        wifi_down,
+        wifi_up,
+        lan_down,
+        lan_up,
+        sta_down,
+        sta_up,
+        down_mbps,
+        up_mbps,
+    )
     _hist_wifi_down.append(wifi_down)
     _hist_wifi_up.append(wifi_up)
     _hist_lan_down.append(lan_down)
@@ -697,7 +749,6 @@ def collect() -> dict:
     usb2, usb3 = _usb_ports()
     lan_ports = _lan_ports()
     vpn1, vpn2, vpn3 = _vpn()
-    top_d, top_u = _top_clients_wifi(now)
     wan_state = _nvram("wan0_state_t") or _nvram("wan0_state")
     online = wan_state in ("2", "connected") or _run("ping -c 1 -W 1 1.1.1.1 >/dev/null && echo OK") == "OK"
 
