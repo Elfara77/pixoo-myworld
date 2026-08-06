@@ -38,7 +38,7 @@ LABEL_BAND_5 = "5GHz"
 
 # Default rotation ("all") — SUM is optional and never included by default.
 ALL_SCREEN_IDS = ("SYS", "LOD", "TMP", "GRP", "WLC", "TOP", "CLI", "NET", "PIE", "SRV")
-OPTIONAL_SCREEN_IDS = ("SUM",)
+OPTIONAL_SCREEN_IDS = ("SUM", "SUM_GRAPH")
 KNOWN_SCREEN_IDS = ALL_SCREEN_IDS + OPTIONAL_SCREEN_IDS
 SCREEN_TITLES = {
     "SYS": "System",
@@ -52,6 +52,7 @@ SCREEN_TITLES = {
     "PIE": "Disks",
     "SRV": "Services",
     "SUM": "Summary",
+    "SUM_GRAPH": "SumGraph",
 }
 
 _ACTIVE_SCREENS: list[str] = list(ALL_SCREEN_IDS)
@@ -92,7 +93,7 @@ _SYS_HP_HIST: list[float] = []
 _NET_SAT_HIST: list[float] = []
 
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
-HEAVY_SCREEN_IDS = frozenset({"LOD", "GRP", "WLC", "TOP", "CLI", "TMP", "SUM"})
+HEAVY_SCREEN_IDS = frozenset({"LOD", "GRP", "WLC", "TOP", "CLI", "TMP", "SUM", "SUM_GRAPH"})
 _HEAVY_DWELL = True
 _HEAVY_DWELL_MULT = 2.0
 
@@ -110,12 +111,14 @@ def get_screen_ids() -> tuple[str, ...]:
 
 
 def set_screens(spec: str | None) -> tuple[str, ...]:
-    """Parse screen list. ``all`` = defaults only (no SUM). ``all,SUM`` or ``SUM`` OK."""
+    """Parse screen list. ``all`` = defaults only (no SUM/SUM_GRAPH). ``all,SUM`` OK."""
     global SCREEN_IDS, _ACTIVE_SCREENS
     raw = "" if spec is None else str(spec).strip()
     if not raw or raw.lower() in ("*", "default"):
         raw = "all"
     tokens = [t.strip().upper() for t in raw.replace(";", ",").replace(" ", ",").split(",") if t.strip()]
+    # Allow SUMGRAPH as alias for SUM_GRAPH
+    tokens = ["SUM_GRAPH" if t in ("SUMGRAPH", "GRAPH") else t for t in tokens]
     wanted: list[str] = []
     if any(t in ("ALL", "DEFAULT") for t in tokens):
         wanted = list(ALL_SCREEN_IDS)
@@ -666,7 +669,12 @@ def _demo_metrics() -> dict[str, Any]:
         "clients_wired": 4,
         "clients_2g": 6,
         "clients_5g": 4,
-        "clients_ssid": [{"ssid": "Home", "n": 7}, {"ssid": "IoT", "n": 3}],
+        "clients_ssid": [
+            {"ssid": "T2G", "n": 10},
+            {"ssid": "CAM", "n": 4},
+            {"ssid": "Main", "n": 2},
+            {"ssid": "Bis", "n": 1},
+        ],
         "wan_online": True,
         "wan_down": round(down, 2),
         "wan_up": round(up, 2),
@@ -1285,6 +1293,13 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
     d = ImageDraw.Draw(img)
     if sid == "SUM":
         _render_sum(img, d, m)
+        if m.get("_offline"):
+            _txt(img, 51, 0, "OFF", YELLOW, size="tiny", role="value", alert=True)
+        return img
+    if sid == "SUM_GRAPH":
+        from pixoo_bridge.sum_graph import render_sum_graph
+
+        render_sum_graph(img, d, m)
         if m.get("_offline"):
             _txt(img, 51, 0, "OFF", YELLOW, size="tiny", role="value", alert=True)
         return img
