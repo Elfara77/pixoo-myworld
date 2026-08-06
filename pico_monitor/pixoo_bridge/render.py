@@ -991,7 +991,7 @@ def _trend_from_history(
 
 
 def _trend_color(mark: str) -> tuple[int, int, int]:
-    """↑ red (rise), ↓ green (fall)."""
+    """↑ red (rise), ↓ green (fall), = gray (stable)."""
     if mark == "↑":
         return RED
     if mark == "↓":
@@ -1095,12 +1095,8 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     y += step
 
     # 2–3) SYS/NET + CPU/RAM — trend arrow in slot before each gauge
-    tr_sys = _trend_from_history(
-        _SYS_HP_HIST, eps_abs=1.0, eps_ratio=0.02, allow_equal=False
-    )
-    tr_net = _trend_from_history(
-        _NET_SAT_HIST, eps_abs=1.0, eps_ratio=0.02, allow_equal=False
-    )
+    tr_sys = _trend_from_history(_SYS_HP_HIST, eps_abs=1.0, eps_ratio=0.02)
+    tr_net = _trend_from_history(_NET_SAT_HIST, eps_abs=1.0, eps_ratio=0.02)
 
     def _label_trend_gauge(
         lab_x: int,
@@ -1131,12 +1127,8 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     ram_col = _diagram_color(ram, kind="load")
     cpu_alert = _is_crit_load(cpu)
     ram_alert = _is_crit_load(ram)
-    tr_cpu = _trend_from_history(
-        m.get("cpu_history"), eps_abs=1.0, eps_ratio=0.02, allow_equal=False
-    )
-    tr_ram = _trend_from_history(
-        m.get("ram_history"), eps_abs=1.0, eps_ratio=0.02, allow_equal=False
-    )
+    tr_cpu = _trend_from_history(m.get("cpu_history"), eps_abs=1.0, eps_ratio=0.02)
+    tr_ram = _trend_from_history(m.get("ram_history"), eps_abs=1.0, eps_ratio=0.02)
     _label_trend_gauge(lab_l, "CPU", tr_cpu, cpu, cpu_col, alert=cpu_alert, g_x0=g_l, g_w0=g_w_l)
     _label_trend_gauge(lab_r, "RAM", tr_ram, ram, ram_col, alert=ram_alert, g_x0=g_r, g_w0=g_w_r)
     y += step
