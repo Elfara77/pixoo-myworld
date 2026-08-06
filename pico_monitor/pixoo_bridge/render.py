@@ -810,6 +810,17 @@ def _demo_metrics() -> dict[str, Any]:
     }
 
 
+def _first_top(rows: list | None) -> tuple[str, float] | None:
+    """Literal first metrics top entry (name, Mbps), or None."""
+    if not rows:
+        return None
+    try:
+        row = rows[0]
+        return str(row[0]), max(0.0, float(row[1]))
+    except (IndexError, TypeError, ValueError):
+        return None
+
+
 def _pick_top(rows: list | None, limit: int = 2) -> list[tuple[str, float]]:
     parsed: list[tuple[str, float]] = []
     for row in rows or []:
@@ -1405,23 +1416,24 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             _txt(img, _right_x("--"), y, "--", DIM, size="tiny", role="status")
         y += step
 
-        # Line 1 = #1 top_up + U; line 2 = #1 top_down + D (after unit)
+        # Line 1 = #1 top_up + unit + orange U; line 2 = #1 top_down + unit + green D
         footer_y0 = 64 - 7
-        for name_rate, cap, tag, tag_col in (
-            (_pick_top(m.get("top_up"), limit=1), _WAN_MAX_UP_MBPS, "U", ORANGE),
-            (_pick_top(m.get("top_down"), limit=1), _WAN_MAX_DOWN_MBPS, "D", GREEN),
+        for entry, tag, tag_col in (
+            (_first_top(m.get("top_up")), "U", ORANGE),
+            (_first_top(m.get("top_down")), "D", GREEN),
         ):
             if y + 4 >= footer_y0:
                 break
-            if not name_rate:
+            if not entry:
                 _txt(img, x0, y, "-", DIM, size="tiny", role="status")
                 y += step
                 continue
-            name, rate = name_rate[0]
+            name, rate = entry
             trail_w = _rate_dir_tag_ink_width(rate, tag)
             max_name_w = max(0, x1 - trail_w - 2 - x0 + 1)
             shown = _truncate_to_width(str(name), max_name_w)
             _txt(img, x0, y, shown, FG if rate > 0 else DIM, size="tiny", role="status")
+            # Rate (num+K/M/G) in white; only U/D carries direction color.
             _draw_rate_dir_tag_right(
                 img,
                 x1,
@@ -1429,7 +1441,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
                 rate,
                 tag,
                 tag_col,
-                rate_color=_wan_link_color(rate, cap),
+                rate_color=FG if rate > 0 else DIM,
             )
             y += step
 
