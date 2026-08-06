@@ -744,6 +744,16 @@ def _gauge_row(img, draw, y: int, label: str, pct: float, *, kind: str = "load")
     _gauge(draw, 20, y, 42, pct, col, alert=alert)
 
 
+def _graph_fill_color(color: Sequence[int], *, scale: float = 0.38) -> tuple[int, int, int]:
+    """Solid area-under-curve tint — same hue, weaker than the stroke."""
+    s = max(0.05, min(1.0, float(scale)))
+    return (
+        max(0, min(255, int(color[0] * s))),
+        max(0, min(255, int(color[1] * s))),
+        max(0, min(255, int(color[2] * s))),
+    )
+
+
 def _graph(img, draw, x, y, w, h, data, color, filled: bool = False) -> None:
     if not data:
         _txt(img, x + 4, y + max(0, h // 2 - 3), "NO DATA", DIM, size="tiny", role="label")
@@ -757,7 +767,7 @@ def _graph(img, draw, x, y, w, h, data, color, filled: bool = False) -> None:
         pts.append((px, py))
     if filled and len(pts) >= 2:
         poly = pts + [(pts[-1][0], y + h - 1), (pts[0][0], y + h - 1)]
-        draw.polygon(poly, fill=(color[0] // 3, color[1] // 3, color[2] // 3))
+        draw.polygon(poly, fill=_graph_fill_color(color))
     if len(pts) >= 2:
         draw.line(pts, fill=color, width=1)
 
@@ -775,10 +785,13 @@ def _graph_up_down(
     col_up,
     *,
     fill_down: bool = True,
+    fill_up: bool | None = None,
 ) -> None:
-    """Down + up on one panel with shared vertical scale."""
+    """Down + up on one panel with shared vertical scale; optional area fills."""
     down = list(down or [])
     up = list(up or [])
+    if fill_up is None:
+        fill_up = fill_down
     if not down and not up:
         _txt(img, x + 4, y + max(0, h // 2 - 3), "NO DATA", DIM, size="tiny", role="label")
         return
@@ -797,9 +810,13 @@ def _graph_up_down(
 
     d_pts = _pts(down)
     u_pts = _pts(up)
+    # Fills under curves first (weaker than stroke), then strokes on top.
     if fill_down and len(d_pts) >= 2:
         poly = d_pts + [(d_pts[-1][0], y + h - 1), (d_pts[0][0], y + h - 1)]
-        draw.polygon(poly, fill=(col_down[0] // 3, col_down[1] // 3, col_down[2] // 3))
+        draw.polygon(poly, fill=_graph_fill_color(col_down))
+    if fill_up and len(u_pts) >= 2:
+        poly = u_pts + [(u_pts[-1][0], y + h - 1), (u_pts[0][0], y + h - 1)]
+        draw.polygon(poly, fill=_graph_fill_color(col_up))
     if len(d_pts) >= 2:
         draw.line(d_pts, fill=col_down, width=1)
     if len(u_pts) >= 2:
