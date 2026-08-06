@@ -645,8 +645,8 @@ def _demo_metrics() -> dict[str, Any]:
         "wifi_history_up": [x * 0.6 for x in hist_u],
         "lan_history_down": [x * 0.2 + 5 * abs(math.sin((t - i) / 5)) for i, x in enumerate(hist_d)],
         "lan_history_up": [x * 0.35 for x in hist_u],
-        "top_down": [["phone45", 125.0], ["living-tv", 42.0]],
-        "top_up": [["nas-box", 18.0], ["cam-front", 7.0]],
+        "top_down": [["phone45", 125.0], ["living-tv", 42.0], ["ipad-lab", 28.0], ["cam-yard", 15.0]],
+        "top_up": [["nas-box", 18.0], ["cam-front", 7.0], ["laptop", 5.0], ["phone45", 3.0]],
         "temp_cpu": int(55 + 15 * abs(math.sin(t / 19))),
         "temp_2g": 45,
         "temp_5g": 52,
@@ -884,27 +884,42 @@ def _client_dir_rate(down_mbps: float, up_mbps: float, tag: str) -> tuple[float,
 
 
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """Full-bleed summary: content inset x=2..62 (skip first & last screen pixels)."""
+    """Full-bleed summary: edge-to-edge (x=0..63), DWN first, then gauges, 4 top hosts."""
     sys_hp = _system_health_score(m)
     net_sat = _network_saturation(m)
     sys_col = _sys_health_color(sys_hp)
     net_col = _net_sat_color(net_sat)
 
-    # Inset: skip pixel 0 and 63 → usable 2..62 inclusive.
-    x0, x1 = 2, 62
-    # Shared columns so SYS/NET match CPU/RAM (3-letter label + 1px + gauge).
+    # Full width — no side gutter (pixels 0 and 63 used).
+    x0, x1 = 0, 63
+    # Shared columns: 3-letter label + 1px + gauge; right gauge ends on x1.
+    lab_w = pf.text_width("SYS", size="tiny")
     lab_l = x0
-    g_l = x0 + pf.text_width("SYS", size="tiny") + 1  # 15
+    g_l = lab_l + lab_w + 1
     g_w = 16
-    lab_r = 34
-    g_r = lab_r + pf.text_width("NET", size="tiny") + 1  # 47 → ends at 62
-    step = 6  # 5px tiny + 1px gap
-    y = 1
+    g_r = x1 - g_w + 1
+    lab_r = g_r - 1 - lab_w
+    step = 5  # tight row pitch so 4 top-client lines fit
+    y = 0
 
     def _right_x(text: str) -> int:
         return x1 - pf.text_width(text, size="tiny") + 1
 
-    # 1) SYS [gauge] NET [gauge]
+    # 1) DWN … | UP … (first line)
+    down = float(m.get("wan_down", 0) or 0)
+    up = float(m.get("wan_up", 0) or 0)
+    down_col = _wan_link_color(down, _WAN_MAX_DOWN_MBPS)
+    up_col = _wan_link_color(up, _WAN_MAX_UP_MBPS)
+    _txt(img, x0, y, "DWN", LABEL, size="tiny", role="label")
+    _draw_rate(img, x0 + pf.text_width("DWN", size="tiny") + 2, y, down, color=down_col)
+    up_rate_slot = pf.text_width("100K", size="tiny")
+    up_lab_w = pf.text_width("UP", size="tiny")
+    up_lab_x = x1 - (up_lab_w + 2 + up_rate_slot) + 1
+    _txt(img, up_lab_x, y, "UP", LABEL, size="tiny", role="label")
+    _draw_rate_right(img, x1, y, up, color=up_col)
+    y += step
+
+    # 2) SYS [gauge] NET [gauge]
     _txt(img, lab_l, y, "SYS", LABEL, size="tiny", role="label")
     _gauge(d, g_l, y, g_w, sys_hp, sys_col, alert=False)
     _txt(img, lab_r, y, "NET", LABEL, size="tiny", role="label")
@@ -916,7 +931,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     tmp = float(m.get("temp_avg", 0) or _temp_avg(m))
     disk = _disk_used_pct(m)
 
-    # 2) CPU [gauge] RAM [gauge]
+    # 3) CPU [gauge] RAM [gauge]
     cpu_col = _diagram_color(cpu, kind="load")
     ram_col = _diagram_color(ram, kind="load")
     cpu_alert = _is_crit_load(cpu)
@@ -927,7 +942,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _gauge(d, g_r, y, g_w, ram, ram_col, alert=ram_alert)
     y += step
 
-    # 3) DSK % …… TMP °C
+    # 4) DSK % …… TMP °C
     dsk_col = _diagram_color(disk, kind="disk")
     tmp_i = int(tmp)
     tmp_hot = _is_crit_temp_tile(tmp_i)
@@ -935,7 +950,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _txt(img, lab_l, y, "DSK", LABEL, size="tiny", role="label", alert=_is_crit_disk_tile(disk))
     _draw_val_unit(
         img,
-        lab_l + pf.text_width("DSK", size="tiny") + 2,
+        lab_l + lab_w + 2,
         y,
         str(int(disk)),
         "%",
@@ -955,7 +970,7 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     )
     _draw_val_unit(
         img,
-        lab_r + pf.text_width("TMP", size="tiny") + 2,
+        lab_r + lab_w + 2,
         y,
         str(tmp_i),
         "°C",
@@ -965,38 +980,26 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     )
     y += step
 
-    # 4) WiFi 15/17 LAN1234
+    # 5) Wi 15/17 …… LAN1234 (LAN block right-justified → "4" on last pixel)
     clients = int(m.get("clients", 0) or 0)
     wifi = int(m.get("clients_wifi", 0) or 0)
     ports = list(m.get("lan_ports") or [False, False, False, False])[:4]
     while len(ports) < 4:
         ports.append(False)
-    ratio = f"{wifi}/{clients}"
-    lan_tail_w = pf.text_width("LAN", size="tiny") + 4 * pf.text_width("0", size="tiny")
-    line_budget = x1 - x0 + 1
-    wifi_lab = "WiFi"
-    if (
-        pf.text_width(wifi_lab, size="tiny")
-        + 1
-        + pf.text_width(ratio, size="tiny")
-        + 1
-        + lan_tail_w
-        > line_budget
-    ):
-        wifi_lab = "Wi"
     x = x0
-    x = _txt(img, x, y, wifi_lab, LABEL, size="tiny", role="label")
+    x = _txt(img, x, y, "Wi", LABEL, size="tiny", role="label")
     x += 1
     x = _txt(img, x, y, str(wifi), GREEN, size="tiny", role="status")
     x = _txt(img, x, y, "/", HEADER, size="tiny", role="status")
     x = _txt(img, x, y, str(clients), GREEN, size="tiny", role="status")
-    x += 1
-    x = _txt(img, x, y, "LAN", LABEL, size="tiny", role="label")
+    lan_w = pf.text_width("LAN", size="tiny") + 4 * pf.text_width("0", size="tiny")
+    lx = x1 - lan_w + 1
+    lx = _txt(img, lx, y, "LAN", LABEL, size="tiny", role="label")
     for i, up in enumerate(ports, start=1):
-        x = _txt(img, x, y, str(i), GREEN if up else RED, size="tiny", role="status")
+        lx = _txt(img, lx, y, str(i), GREEN if up else RED, size="tiny", role="status")
     y += step
 
-    # 5) VPN123 …… USB23 (USB right-justified to x1)
+    # 6) VPN123 …… USB23
     x = x0
     x = _txt(img, x, y, "VPN", LABEL, size="tiny", role="label")
     for i, (_name, on, _typ) in enumerate(_vpn_slots(m)[:3], start=1):
@@ -1013,22 +1016,8 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
     _txt(img, ux, y, "3", GREEN if u3 else RED, size="tiny", role="status")
     y += step
 
-    # 6) DWN … | UP … (UP fixed slot ending at x1)
-    down = float(m.get("wan_down", 0) or 0)
-    up = float(m.get("wan_up", 0) or 0)
-    down_col = _wan_link_color(down, _WAN_MAX_DOWN_MBPS)
-    up_col = _wan_link_color(up, _WAN_MAX_UP_MBPS)
-    _txt(img, x0, y, "DWN", LABEL, size="tiny", role="label")
-    _draw_rate(img, x0 + pf.text_width("DWN", size="tiny") + 2, y, down, color=down_col)
-    up_rate_slot = pf.text_width("100K", size="tiny")
-    up_lab_w = pf.text_width("UP", size="tiny")
-    up_lab_x = x1 - (up_lab_w + 2 + up_rate_slot) + 1
-    _txt(img, up_lab_x, y, "UP", LABEL, size="tiny", role="label")
-    _draw_rate_right(img, x1, y, up, color=up_col)
-    y += step
-
-    # 7) Hot n …… peak tag at x1
-    n_hot, hot = _greedy_clients(m, limit=3)
+    # 7) Hot n …… peak tag
+    n_hot, hot = _greedy_clients(m, limit=4)
     n_show = min(9, int(n_hot))
     hot_col = DIM if n_show == 0 else (YELLOW if n_show < 3 else RED)
     _txt(img, x0, y, "Hot", LABEL, size="tiny", role="label")
@@ -1051,11 +1040,11 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         _txt(img, _right_x("--"), y, "--", DIM, size="tiny", role="status")
     y += step
 
-    # 8+) Top clients — D|U|B + host + rate (within x0..x1)
-    tops = _rank_clients_by_wan_util(m)[:3]
+    # 8+) Up to 4 top clients — D|U|B + host + rate
+    tops = _rank_clients_by_wan_util(m)[:4]
     tag_cols = {"D": GRAPH_DOWN, "U": ORANGE, "B": RED}
     for name, cd, cu, _util in tops:
-        if y > 58:
+        if y > 59:
             break
         tag = _client_dir_tag(cd, cu)
         rate, cap = _client_dir_rate(cd, cu, tag)
@@ -1080,7 +1069,7 @@ def render_screen(m: dict[str, Any], idx: int) -> Image.Image:
     if sid == "SUM":
         _render_sum(img, d, m)
         if m.get("_offline"):
-            _txt(img, 50, 1, "OFF", YELLOW, size="tiny", role="value", alert=True)
+            _txt(img, 51, 0, "OFF", YELLOW, size="tiny", role="value", alert=True)
         return img
 
     _header(img, d, SCREEN_TITLES.get(sid, sid), idx)

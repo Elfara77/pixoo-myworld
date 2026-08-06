@@ -523,8 +523,8 @@ def _top_clients_wifi(now: float) -> tuple[list, list]:
             # Prefer hostname from DHCP lease if available
             short = _lease_name(mac) or ("." + mac.replace(":", "")[-4:])
             rates.append((short, down_kbps, up_kbps))
-    downs = sorted(rates, key=lambda x: x[1], reverse=True)[:3]
-    ups = sorted(rates, key=lambda x: x[2], reverse=True)[:3]
+    downs = sorted(rates, key=lambda x: x[1], reverse=True)[:4]
+    ups = sorted(rates, key=lambda x: x[2], reverse=True)[:4]
     return (
         [(n, round(d / 1000.0, 2)) for n, d, _u in downs],
         [(n, round(u / 1000.0, 2)) for n, _d, u in ups],
