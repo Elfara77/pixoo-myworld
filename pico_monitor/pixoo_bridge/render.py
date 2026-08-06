@@ -2124,70 +2124,57 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
             _draw_trend(img, lab_x + lab_w, y, mark)
         _gauge(d, g_x0, y, g_w0, pct, col, alert=alert)
 
-    # 1) DWN … UP … — graph face: M+median (ex-arrows) + instant rate (tracks curve)
-    #                  clients face: trend arrows + instant
+    # 1) DWN … UP …
+    # graph face: DWN|M glued + median (no arrow); UP|M same — fixed right slots
+    # clients face: DWN/UP + trend arrow + instant — fixed slot positions
     down = float(m.get("wan_down", 0) or 0)
     up = float(m.get("wan_up", 0) or 0)
     show_wan_graph = sum_show_wan_graph()
     down_h = list(m.get("wan_history_down") or [])[-64:]
     up_h = list(m.get("wan_history_up") or [])[-64:]
-    down_col = DIM if (down <= 0 or _rate_is_negligible(down)) else GRAPH_DOWN
-    up_col = DIM if (up <= 0 or _rate_is_negligible(up)) else GRAPH_UP
+    m_badge_w = max(1, pf.text_ink_width("M", size="tiny")) + 2
+    up_badge_w = max(1, pf.text_ink_width("UP", size="tiny")) + 2
+    max_up_rate_w = (
+        pf.text_width("999", size="tiny") + 1 + pf.text_ink_width("M", size="tiny")
+    )
+    # Shared UP badge x: same pixel as graph-face "UP|M" (M slot after UP).
+    up_lab_x = max(0, x1 - (up_badge_w + m_badge_w + 1 + max_up_rate_w) + 2)
     if show_wan_graph:
         med_d = _median(down_h)
         med_u = _median(up_h)
-        med_d_v = float(med_d) if med_d is not None else 0.0
-        med_u_v = float(med_u) if med_u is not None else 0.0
-        # Compact median digits only (green M already marks it); instant rate tracks curve.
-        med_d_s, _u = _split_rate(med_d_v)
-        med_u_s, _u2 = _split_rate(med_u_v)
-        med_d_col = DIM if (med_d_v <= 0 or _rate_is_negligible(med_d_v)) else GRAPH_DOWN
-        med_u_col = DIM if (med_u_v <= 0 or _rate_is_negligible(med_u_v)) else GRAPH_UP
-        m_badge_w = max(1, pf.text_ink_width("M", size="tiny")) + 2
+        d_val = float(med_d) if med_d is not None else down
+        u_val = float(med_u) if med_u is not None else up
+        down_col = DIM if (d_val <= 0 or _rate_is_negligible(d_val)) else GRAPH_DOWN
+        up_col = DIM if (u_val <= 0 or _rate_is_negligible(u_val)) else GRAPH_UP
+        # DWN|M glued; ≥1px then median only (no arrow, no instant).
         x = _draw_sum_inv_lab(img, d, x0, y, "DWN", GRAPH_DOWN)
         x = _draw_sum_median_badge(img, d, x, y)
         x += 1
-        x = _txt(img, x, y, med_d_s, med_d_col, size="tiny", role="status")
-        x += 1
-        _draw_rate(img, x, y, down, color=down_col)
-        up_badge_w = max(1, pf.text_ink_width("UP", size="tiny")) + 2
-        max_med_w = pf.text_width("999", size="tiny")
-        max_up_rate_w = (
-            pf.text_width("999", size="tiny") + 1 + pf.text_ink_width("M", size="tiny")
-        )
-        up_x = x1 - (up_badge_w + m_badge_w + 1 + max_med_w + 1 + max_up_rate_w) + 1
-        ux = _draw_sum_inv_lab(img, d, max(0, up_x), y, "UP", GRAPH_UP)
+        _draw_rate(img, x, y, d_val, color=down_col)
+        ux = _draw_sum_inv_lab(img, d, up_lab_x, y, "UP", GRAPH_UP)
         ux = _draw_sum_median_badge(img, d, ux, y)
-        ux += 1
-        ux = _txt(img, ux, y, med_u_s, med_u_col, size="tiny", role="status")
-        u_ink = _rate_ink_width(up, unit_gap=0)
+        u_ink = _rate_ink_width(u_val, unit_gap=0)
         _draw_rate(
             img,
             max(ux + 1, x1 - u_ink + 1),
             y,
-            up,
+            u_val,
             color=up_col,
             unit_gap=0,
         )
     else:
+        down_col = DIM if (down <= 0 or _rate_is_negligible(down)) else GRAPH_DOWN
+        up_col = DIM if (up <= 0 or _rate_is_negligible(up)) else GRAPH_UP
         tr_dn = _trend_from_history(m.get("wan_history_down"), eps_abs=0.05)
         tr_up = _trend_from_history(m.get("wan_history_up"), eps_abs=0.02)
         x = _draw_sum_inv_lab(img, d, x0, y, "DWN", GRAPH_DOWN)
-        x += 1  # trend arrow 1px toward the rate/graph
+        x += 1  # trend arrow 1px toward the rate
         x = _draw_trend(img, x, y, tr_dn)
-        # No gap after arrow — rate glued to trend (frees 1px for UP).
         _draw_rate(img, x, y, down, color=down_col)
-        # Fixed UP badge: reserve trend slot + max rate; +2px vs prior (no post-arrow gaps).
-        up_badge_w = max(1, pf.text_ink_width("UP", size="tiny")) + 2
-        max_up_rate_w = (
-            pf.text_width("999", size="tiny") + 1 + pf.text_ink_width("M", size="tiny")
-        )
-        # badge|+1 arrow|trend|rate — no 1px after arrows (gains 2px → UP further right).
-        up_x = x1 - (up_badge_w + 1 + trend_w + max_up_rate_w) + 2
-        ux = _draw_sum_inv_lab(img, d, up_x, y, "UP", GRAPH_UP)
-        ux += 1  # trend arrow 1px toward the rate/graph
+        # UP at same x as graph-face UP|M; then +1px trend + flush-right rate.
+        ux = _draw_sum_inv_lab(img, d, up_lab_x, y, "UP", GRAPH_UP)
+        ux += 1
         _draw_trend(img, ux, y, tr_up)
-        # Rate flush-right; glue last digit to unit (−1px gap vs DWN).
         _draw_rate_right(img, x1, y, up, color=up_col, unit_gap=0)
     y += step
 
