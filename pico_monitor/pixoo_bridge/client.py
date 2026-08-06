@@ -16,6 +16,9 @@ class PixooClient:
 
     _REFRESH_LIMIT = 32
 
+    # PicSpeed for still updates: low so any queued GIF slot does not linger ~1s.
+    _PIC_SPEED_MS = 10
+
     def __init__(self, ip: str, size: int = 64, *, timeout: float = 3.0) -> None:
         if size not in (16, 32, 64):
             raise ValueError(f"Invalid Pixoo size: {size}")
@@ -23,8 +26,12 @@ class PixooClient:
         self.size = size
         self.timeout = timeout
         self._url = f"http://{ip}/post"
-        self._pic_id = 1
-        self._load_pic_id()
+        self._pic_id = 0
+        # Drop leftover animation frames from a prior process, then start clean.
+        try:
+            self._reset_pic_id()
+        except Exception:
+            self._pic_id = 0
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
@@ -47,13 +54,6 @@ class PixooClient:
             raise RuntimeError(f"Pixoo API error: {data}")
         return data if isinstance(data, dict) else {}
 
-    def _load_pic_id(self) -> None:
-        try:
-            data = self._post({"Command": "Draw/GetHttpGifId"})
-            self._pic_id = int(data.get("PicId", 1))
-        except Exception:
-            self._pic_id = 1
-
     def _reset_pic_id(self) -> None:
         self._post({"Command": "Draw/ResetHttpGifId"})
         self._pic_id = 0
@@ -69,7 +69,8 @@ class PixooClient:
         except Exception:
             return False
 
-    def push_image(self, image: Image.Image) -> None:
+    def push_image(self, image: Image.Image, *, reset: bool = False) -> None:
+        """Push a 64×64 RGB still. ``reset=True`` clears the GIF buffer (layout changes)."""
         rgb = image.convert("RGB")
         if rgb.size != (self.size, self.size):
             try:
@@ -85,10 +86,11 @@ class PixooClient:
                 r, g, b = pixels[x, y]
                 buf.extend((r, g, b))
 
-        self._pic_id += 1
-        if self._pic_id >= self._REFRESH_LIMIT:
+        next_id = self._pic_id + 1
+        if reset or next_id >= self._REFRESH_LIMIT:
             self._reset_pic_id()
-            self._pic_id = 1
+            next_id = 1
+        self._pic_id = next_id
 
         self._post(
             {
@@ -97,7 +99,7 @@ class PixooClient:
                 "PicWidth": self.size,
                 "PicOffset": 0,
                 "PicID": self._pic_id,
-                "PicSpeed": 1000,
+                "PicSpeed": self._PIC_SPEED_MS,
                 "PicData": base64.b64encode(buf).decode("ascii"),
             }
         )

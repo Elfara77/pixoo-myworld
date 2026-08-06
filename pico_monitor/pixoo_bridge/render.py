@@ -95,27 +95,35 @@ _NET_SAT_HIST: list[float] = []
 # 0–3 clients (4/8); 4–7 WAN graph (4/8) with DOWN|UP legend above the plot.
 _SUM_DWELL_T0 = 0.0
 _SUM_DWELL_D = 1.0
+# Latched once per frame in set_sum_dwell — never recompute mid-render.
+_SUM_PHASE = 0
+_SUM_SHOW_WAN_GRAPH = False
 
 
 def set_sum_dwell(t0: float, dwell_s: float) -> None:
-    """Bind SUM phase clock to the current rotator dwell (call each SUM frame)."""
-    global _SUM_DWELL_T0, _SUM_DWELL_D
+    """Bind SUM phase clock to the current rotator dwell (call each SUM frame).
+
+    Latches phase / graph-half at bind time so layout cannot flip mid-render.
+    """
+    global _SUM_DWELL_T0, _SUM_DWELL_D, _SUM_PHASE, _SUM_SHOW_WAN_GRAPH
+    import time
+
     _SUM_DWELL_T0 = float(t0)
     _SUM_DWELL_D = max(0.08, float(dwell_s))
+    elapsed_ms = max(0, int((time.monotonic() - _SUM_DWELL_T0) * 1000.0))
+    dwell_ms = max(80, int(round(_SUM_DWELL_D * 1000.0)))
+    _SUM_PHASE = min(7, (elapsed_ms * 8) // dwell_ms)
+    _SUM_SHOW_WAN_GRAPH = _SUM_PHASE >= 4
 
 
 def sum_phase() -> int:
-    """0–7 within current SUM dwell (equal eighths of D, integer ms — no float edge flicker)."""
-    import time
-
-    elapsed_ms = max(0, int((time.monotonic() - _SUM_DWELL_T0) * 1000.0))
-    dwell_ms = max(80, int(round(_SUM_DWELL_D * 1000.0)))
-    return min(7, (elapsed_ms * 8) // dwell_ms)
+    """0–7 within current SUM dwell (latched at set_sum_dwell)."""
+    return _SUM_PHASE
 
 
 def sum_show_wan_graph() -> bool:
-    """True for the last 4/8 of the SUM dwell (graph window)."""
-    return sum_phase() >= 4
+    """True for the last 4/8 of the SUM dwell (graph window; latched per frame)."""
+    return _SUM_SHOW_WAN_GRAPH
 
 
 # Graphs / dense lists: longer rotation dwell (× multiplier on PIXOO_SCREEN_SECONDS).
@@ -1492,7 +1500,7 @@ def _draw_sum_wi_lan_row(
 
 
 def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
-    """Full-bleed summary: DWN first; 2 top hosts; footer time/uptime/date inverted."""
+    """Full-bleed summary: DOWN/UP rates first; 2 top hosts; footer time/uptime/date inverted."""
     sys_hp = _system_health_score(m)
     net_sat = _network_saturation(m)
     sys_col = _sys_health_color(sys_hp)
@@ -1525,14 +1533,14 @@ def _render_sum(img, d: ImageDraw.ImageDraw, m: dict[str, Any]) -> None:
         # Flush last ink to x1 (tiny advance width leaves a dead trailing px).
         return x1 - pf.text_ink_width(text, size="tiny") + 1
 
-    # 1) DWN↑ rate | UP↑ rate — trend glued to label
+    # 1) DOWN↑ rate | UP↑ rate — trend glued to label
     down = float(m.get("wan_down", 0) or 0)
     up = float(m.get("wan_up", 0) or 0)
     down_col = _wan_link_color(down, _WAN_MAX_DOWN_MBPS)
     up_col = _wan_link_color(up, _WAN_MAX_UP_MBPS)
     tr_dn = _trend_from_history(m.get("wan_history_down"), eps_abs=0.05)
     tr_up = _trend_from_history(m.get("wan_history_up"), eps_abs=0.02)
-    x = _txt(img, x0, y, "DWN", LABEL, size="tiny", role="label")
+    x = _txt(img, x0, y, "DOWN", LABEL, size="tiny", role="label")
     x = _draw_trend(img, x, y, tr_dn)  # glued to label
     x += 1
     _draw_rate(img, x, y, down, color=down_col)
