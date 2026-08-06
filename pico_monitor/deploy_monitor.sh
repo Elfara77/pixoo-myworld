@@ -6,7 +6,7 @@
 #   ./deploy_monitor.sh install      # non-interactive upload+install+start
 #   ./deploy_monitor.sh uninstall
 #   ./deploy_monitor.sh status
-#   ./deploy_monitor.sh auto         # full pipeline (uninstall→upload→install→start bridge)
+#   ./deploy_monitor.sh auto         # upload→install→start bridge (no wipe)
 #   ./deploy_monitor.sh pilot        # remote pilotage submenu
 #   ./deploy_monitor.sh start|stop|cron-on|cron-off
 #   ./deploy_monitor.sh logs         # pull router logs → pico_monitor/logs/
@@ -1313,14 +1313,16 @@ status_remote() {
   echo "  ./deploy_monitor.sh logs   # pull ${REMOTE_PATH}/logs/"
 }
 
-# Full pipeline: clean slate → upload → install (metrics + Pixoo bridge) → verify
+# Full pipeline: upload → install → start → verify.
+# Does NOT uninstall/wipe — wiping stopped the bridge and left the Pixoo stuck
+# on its last frame. Use menu « Uninstall » for a destructive reset.
 auto_mode() {
   echo "╔══════════════════════════════════════════╗"
   echo "║  Mode automatique — Merlin + Pixoo       ║"
   echo "╚══════════════════════════════════════════╝"
   echo "  Merlin SSH : $(TARGET)"
   echo "  Pixoo      : ${PIXOO_IP}"
-  echo "  Steps: uninstall → clean → upload → install → start → verify"
+  echo "  Steps: upload → install → start → verify  (no wipe)"
   echo ""
 
   check_prereq || {
@@ -1329,27 +1331,19 @@ auto_mode() {
   }
 
   echo ""
-  echo "[1/6] Uninstall (if present)…"
-  uninstall_remote || true
-
-  echo ""
-  echo "[2/6] Clean remote tree…"
-  clean_remote || true
-
-  echo ""
-  echo "[3/6] Upload merlin + pixoo_bridge…"
+  echo "[1/4] Upload merlin + pixoo_bridge…"
   upload
 
   echo ""
-  echo "[4/6] Install (opkg + cru + metrics + Pixoo bridge)…"
+  echo "[2/4] Install (opkg + cru + metrics + Pixoo bridge)…"
   install_remote
 
   echo ""
-  echo "[5/6] Ensure watchdog (metrics + bridge) running…"
+  echo "[3/4] Ensure watchdog (metrics + bridge) running…"
   start_watchdog || true
 
   echo ""
-  echo "[6/6] Verify metrics + Pixoo…"
+  echo "[4/4] Verify metrics + Pixoo…"
   sleep 3
   test_metrics || true
   ping_pixoo || true
@@ -1561,7 +1555,7 @@ EOF
   if [[ "${items_name}" == "PILOT_MENU_ITEMS" ]]; then
     echo "  start/stop/cron via SSH · Pixoo = ${PIXOO_IP}"
   else
-    echo "  Auto install starts metrics + Pixoo bridge ON Merlin."
+    echo "  Auto: upload+install+start (no wipe). Uninstall = menu item."
     echo "  Logs: ${REMOTE_PATH}/logs/  →  ./deploy_monitor.sh logs"
   fi
 }

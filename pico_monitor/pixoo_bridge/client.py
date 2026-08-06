@@ -14,18 +14,20 @@ from PIL import Image
 class PixooClient:
     """Pushes 64×64 RGB frames via Draw/SendHttpGif.
 
-    Live stills: keep ``PicID=1`` / ``PicNum=1`` and *overwrite* the same slot.
-    Do **not** reset the GIF buffer every frame — ``ResetHttpGifId`` blanks the
-    panel briefly and causes visible flashes at ~1 Hz.
+    Firmware quirk (community-confirmed): ``SendHttpGif`` without a prior
+    ``ResetHttpGifId`` returns ``error_code: 0`` but **does not update pixels**.
+    After a few overwrites the panel looks frozen while the bridge keeps
+    "succeeding". Always reset, then send a single still (``PicID=1``,
+    ``PicNum=1``).
 
-    Reset only on boot and when the caller requests a hard layout cut (screen
-    change). Avoid incrementing PicID: that queues animation slots and can
-    briefly replay older frames.
+    Also force Custom channel (``Channel/SetIndex`` SelectIndex=3) so the
+    device is actually showing HTTP GIF content.
     """
 
-    # Single-frame still; value is mostly ignored when PicNum=1.
     _PIC_SPEED_MS = 1000
     _PIC_ID = 1
+    # Custom / DIY channel — required for SendHttpGif to be visible.
+    _CHANNEL_CUSTOM = 3
 
     def __init__(self, ip: str, size: int = 64, *, timeout: float = 3.0) -> None:
         if size not in (16, 32, 64):
@@ -34,8 +36,8 @@ class PixooClient:
         self.size = size
         self.timeout = timeout
         self._url = f"http://{ip}/post"
-        # Drop leftover multi-frame animations from a prior process.
         try:
+            self._set_custom_channel()
             self._reset_gif_buffer()
         except Exception:
             pass
@@ -64,6 +66,11 @@ class PixooClient:
     def _reset_gif_buffer(self) -> None:
         self._post({"Command": "Draw/ResetHttpGifId"})
 
+    def _set_custom_channel(self) -> None:
+        self._post(
+            {"Command": "Channel/SetIndex", "SelectIndex": self._CHANNEL_CUSTOM}
+        )
+
     def set_brightness(self, brightness: int) -> None:
         brightness = max(0, min(100, int(brightness)))
         self._post({"Command": "Channel/SetBrightness", "Brightness": brightness})
@@ -75,12 +82,13 @@ class PixooClient:
         except Exception:
             return False
 
-    def push_image(self, image: Image.Image, *, reset: bool = False) -> None:
-        """Push a 64×64 RGB still, overwriting ``PicID=1``.
+    def push_image(self, image: Image.Image, *, reset: bool = True) -> None:
+        """Push a 64×64 RGB still.
 
-        ``reset=True`` clears the GIF buffer first (boot / screen change only).
-        Normal ticks overwrite in place — no blank flash between frames.
+        Always ``ResetHttpGifId`` then ``SendHttpGif`` PicID=1 — required for
+        the panel to actually refresh. ``reset`` kept for call-site compat.
         """
+        del reset  # always reset; see class docstring
         rgb = image.convert("RGB")
         if rgb.size != (self.size, self.size):
             try:
@@ -96,9 +104,8 @@ class PixooClient:
                 r, g, b = pixels[x, y]
                 buf.extend((r, g, b))
 
-        if reset:
-            self._reset_gif_buffer()
-
+        # Reset is mandatory: without it the device ACKs and paints nothing.
+        self._reset_gif_buffer()
         self._post(
             {
                 "Command": "Draw/SendHttpGif",

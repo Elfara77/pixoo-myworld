@@ -328,8 +328,6 @@ def main(argv: list[str] | None = None) -> int:
     metrics_ok = 0
     metrics_fail = 0
     screens = get_screen_ids()
-    # Reset GIF only on hard screen cuts — never mid-SUM (avoids blank flashes).
-    layout_key: str | None = "BOOT"
     LOG.info("loop screens=%s ids=%s", len(screens), ",".join(screens))
 
     while True:
@@ -381,11 +379,9 @@ def main(argv: list[str] | None = None) -> int:
         frame = render_screen(m, screen_i)
         if args.preview:
             frame.save(args.preview / f"{screen_i:02d}_{screens[screen_i].lower()}.png")
-        # Overwrite PicID=1 in place; hard reset only when the screen id changes.
-        reset_gif = layout_key != cur_sid
-        layout_key = cur_sid
+        # Always ResetHttpGifId + SendHttpGif (firmware ignores overwrite without reset).
         try:
-            client.push_image(frame, reset=reset_gif)
+            client.push_image(frame)
             if snapshot_path is not None:
                 _save_snapshot(frame, snapshot_path, screen_id=screens[screen_i])
         except Exception as exc:
