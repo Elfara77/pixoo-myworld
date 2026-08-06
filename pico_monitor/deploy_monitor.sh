@@ -1016,10 +1016,15 @@ autostart() {
 test_metrics() {
   echo "==> GET http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsS --max-time 5 "http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json" | head -c 400
-    echo
+    if command -v python3 >/dev/null 2>&1; then
+      curl -fsS --max-time 5 "http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json" \
+        | python3 -m json.tool
+    else
+      curl -fsS --max-time 5 "http://${ROUTER_HOST}:${METRICS_PORT}/metrics.json"
+      echo
+    fi
   else
-    remote "wget -qO- http://127.0.0.1:${METRICS_PORT}/metrics.json 2>/dev/null | head -c 400; echo"
+    remote "wget -qO- http://127.0.0.1:${METRICS_PORT}/metrics.json 2>/dev/null; echo"
   fi
 }
 
