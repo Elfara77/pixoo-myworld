@@ -48,9 +48,9 @@ cd pico_monitor
 | `PIXOO_WAN_MAX_UP_MBPS` / `--wan-max-up` | `12` | Cap saturation upload (Mbps) pour santé Net SUM + classement Top |
 | `PIXOO_FRAME_INTERVAL` / `--frame-interval` | `1.05` | Intervalle minimum entre pushes HTTP |
 | `PIXOO_BRIGHTNESS` / `--brightness` | `50` | Luminosité Pixoo 0–100 |
-| `PIXOO_SCREENS` / `--screens` | `all` | `all` = défauts **sans SUM/SUM_GRAPH**. Optionnels : `SUM` (résumé texte), `SUM_GRAPH` (sparklines/jauges/donuts), seuls ou mélangés (`all,SUM` / `all,SUM_GRAPH` / `SUM,SUM_GRAPH,…`). Pastille position si >1 écran (sauf SUM/SUM_GRAPH sans bannière). |
+| `PIXOO_SCREENS` / `--screens` | `all` | `all` = défauts **sans SUM/SUM_GRAPH**. Optionnels : `SUM` (résumé), `SUM_GRAPH` (historique WAN down/up 64 pts). La sélection est toujours persistée en liste explicite (`SYS,LOD,…`) côté Merlin. |
 
-Ordre logique défaut : System → Load → Temps → Traffic → WiFi/LAN → Top → Clients → Ports → Disk → Services. **SUM** = résumé santé texte ; **SUM_GRAPH** = même données en 4 blocs graphiques (sparklines, jauges, donuts SSID, top 3). Non inclus dans `all` (deploy : **s** = SUM seul, **g** = SUM_GRAPH seul).
+Ordre logique défaut : System → Load → Temps → Traffic → WiFi/LAN → Top → Clients → Ports → Disk → Services. **SUM** = résumé santé (mini graphe WAN à la place de Hot Wifi). **SUM_GRAPH** = écran plein dédié aux 64 échantillons WAN down+up. Deploy : **s** = SUM, **g** = SUM_GRAPH.
 
 ## Probe
 
