@@ -74,6 +74,29 @@ def _setup_logging(log_path: str | None) -> None:
     )
 
 
+def _resolve_snapshot_path(explicit: str | None, log_path: str | None) -> Path | None:
+    """PNG path for last pushed frame. Pixoo API cannot read the LED matrix back."""
+    if explicit:
+        return Path(explicit)
+    if log_path:
+        # …/logs/pixoo_bridge.log → …/run/pixoo_last.png
+        return Path(log_path).resolve().parent.parent / "run" / "pixoo_last.png"
+    return None
+
+
+def _save_snapshot(frame, path: Path, *, screen_id: str = "") -> None:
+    """Atomically write 64×64 PNG (+ optional .txt with screen id)."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        frame.save(tmp, format="PNG")
+        tmp.replace(path)
+        if screen_id:
+            path.with_suffix(".txt").write_text(f"{screen_id}\n", encoding="utf-8")
+    except OSError as exc:
+        LOG.warning("snapshot save warn: %s", exc)
+
+
 def fetch_metrics(url: str, timeout: float = 3.0) -> dict:
     req = urllib.request.Request(url, method="GET")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -181,6 +204,11 @@ def main(argv: list[str] | None = None) -> int:
         default=env.get("PIXOO_LOG") or None,
         help="Also write log file (e.g. /jffs/addons/pico_monitor/logs/pixoo_bridge.log)",
     )
+    ap.add_argument(
+        "--snapshot-path",
+        default=env.get("PIXOO_SNAPSHOT_PATH") or None,
+        help="Write last pushed 64×64 PNG here (default: <addon>/run/pixoo_last.png when --log set)",
+    )
     args = ap.parse_args(argv)
 
     scroll_on = str(args.text_scroll).strip().lower() in ("1", "true", "yes", "on")
@@ -202,8 +230,9 @@ def main(argv: list[str] | None = None) -> int:
     screens = get_screen_ids()
 
     _setup_logging(args.log)
+    snapshot_path = _resolve_snapshot_path(args.snapshot_path, args.log)
     LOG.info(
-        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s heavy_dwell=%s heavy_x=%s wlc_graph=%s wan_max=%.0f/%.0f frame_s=%s color=%s scroll=%s blink=%s rate=%s screens=%s",
+        "start pixoo=%s metrics=%s demo=%s brightness=%s screen_s=%s heavy_dwell=%s heavy_x=%s wlc_graph=%s wan_max=%.0f/%.0f frame_s=%s color=%s scroll=%s blink=%s rate=%s screens=%s snapshot=%s",
         args.pixoo,
         args.metrics,
         args.demo,
@@ -220,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         blink_on,
         args.rate_style,
         ",".join(screens),
+        str(snapshot_path) if snapshot_path else "-",
     )
 
     client = PixooClient(args.pixoo)
@@ -235,6 +265,8 @@ def main(argv: list[str] | None = None) -> int:
 
     boot = render_boot_banner("LIVE" if not args.demo else "DEMO")
     client.push_image(boot)
+    if snapshot_path is not None:
+        _save_snapshot(boot, snapshot_path, screen_id="BOOT")
     LOG.info("pushed boot banner (%s)", "DEMO" if args.demo else "LIVE")
     if args.preview:
         args.preview.mkdir(parents=True, exist_ok=True)
@@ -301,6 +333,8 @@ def main(argv: list[str] | None = None) -> int:
             frame.save(args.preview / f"{screen_i:02d}_{screens[screen_i].lower()}.png")
         try:
             client.push_image(frame)
+            if snapshot_path is not None:
+                _save_snapshot(frame, snapshot_path, screen_id=screens[screen_i])
         except Exception as exc:
             LOG.error("push error: %s\n%s", exc, traceback.format_exc())
 

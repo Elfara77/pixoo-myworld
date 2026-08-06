@@ -10,6 +10,7 @@
 #   ./deploy_monitor.sh pilot        # remote pilotage submenu
 #   ./deploy_monitor.sh start|stop|cron-on|cron-off
 #   ./deploy_monitor.sh logs         # pull router logs → pico_monitor/logs/
+#   ./deploy_monitor.sh snapshot     # last Pixoo 64×64 frame → logs/snapshots/*.png
 #
 # Hosts (do not conflate):
 #   PICO_ROUTER_HOST  Merlin LAN IP — SSH deploy + /metrics.json (default 192.168.50.1)
@@ -28,6 +29,7 @@ MERLIN_SRC="${ROOT}/merlin"
 BRIDGE_SRC="${ROOT}/pixoo_bridge"
 FIRMWARE_SRC="${ROOT}/firmware"
 LOCAL_LOGS="${ROOT}/logs"
+LOCAL_SNAPS="${ROOT}/logs/snapshots"
 CFG_HOME="${HOME}/.pico_monitor_config"
 CFG_PROJECT="${ROOT}/.deploy.env"
 
@@ -1078,6 +1080,35 @@ pull_logs() {
   fi
 }
 
+# Pull last 64×64 frame the bridge pushed to Pixoo (PNG). Device API cannot read LEDs back.
+pull_pixoo_snapshot() {
+  echo "==> snapshot Pixoo frame → ${LOCAL_SNAPS}/"
+  mkdir -p "${LOCAL_SNAPS}"
+  local stamp dest remote_png remote_txt sid
+  stamp="$(date '+%Y%m%d_%H%M%S')"
+  dest="${LOCAL_SNAPS}/pixoo_${stamp}.png"
+  remote_png="${REMOTE_PATH}/run/pixoo_last.png"
+  remote_txt="${REMOTE_PATH}/run/pixoo_last.txt"
+
+  if ! scp_base "$(TARGET):${remote_png}" "${dest}" 2>/dev/null; then
+    echo "warn: no snapshot on Merlin (${remote_png})" >&2
+    echo "  → start/restart the bridge, wait ~1s, retry. Pixoo cannot export its LED matrix." >&2
+    return 1
+  fi
+  ln -sfn "pixoo_${stamp}.png" "${LOCAL_SNAPS}/latest.png" 2>/dev/null || true
+  sid=""
+  if scp_base "$(TARGET):${remote_txt}" "${LOCAL_SNAPS}/pixoo_${stamp}.txt" 2>/dev/null; then
+    sid="$(tr -d '\r\n' < "${LOCAL_SNAPS}/pixoo_${stamp}.txt" 2>/dev/null || true)"
+  fi
+  echo "OK 64×64 PNG: ${dest}${sid:+  (screen=${sid})}"
+  ls -la "${dest}"
+  if command -v open >/dev/null 2>&1; then
+    open "${dest}" 2>/dev/null || true
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "${dest}" 2>/dev/null || true
+  fi
+}
+
 uninstall_remote() {
   echo "==> uninstall ${REMOTE_PATH}"
   remote "
@@ -1276,6 +1307,7 @@ MENU_ITEMS=(
   "Autostart status (cru)|autostart"
   "Test /metrics.json (Merlin)|test_metrics"
   "Test Pixoo API|ping_pixoo"
+  "Snapshot Pixoo → PNG local|pull_pixoo_snapshot"
   "Tail logs (remote)|show_logs"
   "Récupérer logs → local|pull_logs"
   "Uninstall|uninstall_remote"
@@ -1292,6 +1324,7 @@ PILOT_MENU_ITEMS=(
   "Sélection écrans|configure_screens_and_apply"
   "État détaillé|pilot_status"
   "Test Pixoo API|ping_pixoo"
+  "Snapshot Pixoo → PNG local|pull_pixoo_snapshot"
   "Test metrics Merlin|test_metrics"
   "Récupérer logs|pull_logs"
   "Retour|back"
@@ -1466,6 +1499,7 @@ run_menu_action() {
     pilot_status) pilot_status || true ;;
     test_link_pico) test_link_pico || true ;;
     ping_pixoo) ping_pixoo || true ;;
+    pull_pixoo_snapshot) pull_pixoo_snapshot || true ;;
     autostart) autostart ;;
     test_metrics) test_metrics || true ;;
     show_logs) show_logs ;;
@@ -1629,7 +1663,7 @@ menu() {
 
 usage() {
   cat <<EOF
-Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash|pilot|start|stop|cron-on|cron-off|logs|visual|screens]
+Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash|pilot|start|stop|cron-on|cron-off|logs|snapshot|visual|screens]
 
   (no args) / menu   Interactive menu (↑/↓ + ENTER, or numbers)
   auto               Full pipeline + assistant paramétrage visuel
@@ -1641,6 +1675,7 @@ Usage: $0 [menu|install|uninstall|status|auto|upload|test|flash|pilot|start|stop
   upload             Sync merlin/ + pixoo_bridge/
   test               GET /metrics.json
   logs               Pull router logs → pico_monitor/logs/
+  snapshot           Pull last 64×64 Pixoo frame → pico_monitor/logs/snapshots/*.png
   flash              Pico OLED firmware sync (optional; not for Pixoo)
   pilot              Remote pilotage submenu (start/stop/cron/status/tests)
   start              Start/reload metrics + Pixoo bridge on Merlin
@@ -1684,6 +1719,7 @@ case "${CMD}" in
   upload) upload ;;
   test) test_metrics ;;
   logs|pull-logs|pull_logs) pull_logs ;;
+  snapshot|snap|pixoo-snap|pull_snapshot) pull_pixoo_snapshot ;;
   flash) flash_pico ;;
   pilot|pilotage) pilotage_menu ;;
   start) start_watchdog ;;
