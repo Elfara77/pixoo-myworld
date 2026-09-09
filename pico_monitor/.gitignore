@@ -1,0 +1,9 @@
+.deploy.env
+__pycache__/
+*.pyc
+.DS_Store
+firmware/.flash/
+merlin/logs/
+merlin/run/
+merlin/config.env
+logs/

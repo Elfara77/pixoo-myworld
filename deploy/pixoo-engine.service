@@ -1,0 +1,20 @@
+[Unit]
+Description=Pixoo Engine (headless monitor → Divoom Pixoo 64)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pixoo
+Group=pixoo
+WorkingDirectory=/opt/pixoo
+Environment=PYTHONPATH=/opt/pixoo/src
+ExecStart=/opt/pixoo/.venv/bin/python -m pixoo daemon --project /opt/pixoo/projects/demo_v2.pixoo --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+
+# Optional: override Pixoo IP
+# ExecStart=/opt/pixoo/.venv/bin/python -m pixoo daemon --project /opt/pixoo/projects/demo_v2.pixoo --pixoo-ip 192.168.52.4
+
+[Install]
+WantedBy=multi-user.target

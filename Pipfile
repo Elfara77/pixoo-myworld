@@ -9,13 +9,33 @@ psutil = ">=6.0.0"
 pillow = ">=10.0.0"
 questionary = ">=2.0.0"
 rich = ">=13.0.0"
+pyside6 = "<6.12,>=6.8"
+jsonpath-ng = ">=1.6"
+pydantic = "<3,>=2.6"
+fastapi = "<1,>=0.115"
+uvicorn = {extras = ["standard"], version = "<1,>=0.30"}
+httpx = "<1,>=0.27"
+typer = "<1,>=0.12"
+python-dotenv = "*"
+beautifulsoup4 = "*"
+lxml = "*"
+paho-mqtt = ">=1.6"
+websocket-client = "*"
+sqlalchemy = ">=2.0"
+icalendar = ">=5.0"
 
 [dev-packages]
+pytest = ">=8.0"
+pytest-asyncio = ">=0.24"
 
 [requires]
 python_version = "3.12"
 
 [scripts]
+pixoo = "python -m pixoo"
 monitor = "python -m pixoo_monitor"
 setup = "python -m pixoo_monitor.setup"
 test = "python -m pixoo_monitor.test_mode"
+designer = "python -m pixoo_designer"
+studio = "python -m pixoo studio"
+studio-legacy = "python -m pixoo_studio"
