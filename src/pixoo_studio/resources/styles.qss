@@ -1,0 +1,117 @@
+/* Pixoo Studio — thème sombre professionnel */
+* {
+  font-family: "SF Pro Text", "Segoe UI", "Ubuntu", sans-serif;
+  font-size: 13px;
+}
+
+QMainWindow, QDialog, QWidget {
+  background-color: #1a1b1e;
+  color: #e8e8ec;
+}
+
+QMenuBar {
+  background-color: #121316;
+  color: #e8e8ec;
+  border-bottom: 1px solid #2a2b30;
+  padding: 2px;
+}
+QMenuBar::item:selected { background: #2d6cdf; }
+QMenu {
+  background-color: #1e1f24;
+  border: 1px solid #33343a;
+}
+QMenu::item:selected { background: #2d6cdf; }
+
+QToolBar {
+  background: #121316;
+  border: none;
+  border-bottom: 1px solid #2a2b30;
+  spacing: 6px;
+  padding: 4px;
+}
+QToolButton {
+  background: #2a2b30;
+  border: 1px solid #3a3b42;
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: #e8e8ec;
+}
+QToolButton:hover { background: #34353c; }
+QToolButton:pressed { background: #2d6cdf; }
+
+QDockWidget {
+  titlebar-close-icon: none;
+  color: #e8e8ec;
+}
+QDockWidget::title {
+  background: #121316;
+  padding: 8px;
+  border-bottom: 1px solid #2a2b30;
+  font-weight: 600;
+}
+
+QListWidget, QTreeWidget, QPlainTextEdit, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+  background: #121316;
+  border: 1px solid #2a2b30;
+  border-radius: 6px;
+  padding: 4px 6px;
+  selection-background-color: #2d6cdf;
+}
+
+QListWidget::item { padding: 6px 8px; border-radius: 4px; }
+QListWidget::item:selected { background: #2d6cdf; }
+QListWidget::item:hover { background: #25262c; }
+
+QPushButton {
+  background: #2d6cdf;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-weight: 600;
+}
+QPushButton:hover { background: #3b7aef; }
+QPushButton:disabled { background: #3a3b42; color: #888; }
+QPushButton#secondary {
+  background: #2a2b30;
+  border: 1px solid #3a3b42;
+  color: #e8e8ec;
+}
+
+QLabel#previewFrame {
+  background: #0b0b0d;
+  border: 2px solid #2a2b30;
+  border-radius: 8px;
+}
+
+QStatusBar {
+  background: #121316;
+  color: #9a9aa6;
+  border-top: 1px solid #2a2b30;
+}
+
+QSplitter::handle { background: #2a2b30; width: 2px; height: 2px; }
+
+QGroupBox {
+  border: 1px solid #2a2b30;
+  border-radius: 8px;
+  margin-top: 12px;
+  padding-top: 8px;
+}
+QGroupBox::title {
+  subcontrol-origin: margin;
+  left: 10px;
+  padding: 0 4px;
+  color: #9a9aa6;
+}
+
+QScrollArea { border: none; }
+QTabWidget::pane { border: 1px solid #2a2b30; border-radius: 6px; }
+QTabBar::tab {
+  background: #121316;
+  padding: 8px 14px;
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  margin-right: 2px;
+}
+QTabBar::tab:selected { background: #2d6cdf; }

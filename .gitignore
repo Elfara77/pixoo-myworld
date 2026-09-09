@@ -1,21 +1,53 @@
+# Python
 .venv/
 __pycache__/
 *.py[cod]
+*$py.class
 *.egg-info/
+.eggs/
 dist/
 build/
 .Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Local secrets / machine-specific config (keep *.example* tracked)
 config.toml
-assets/test_preview/
-data/history/*.json
-!data/history/.gitkeep
-configs/setups/*.toml
-!configs/setups/.gitkeep
-.DS_Store
-*.png
-!assets/.gitkeep
+config.env
+.deploy.env
 .env
+.env.*
+!.env.example
+.secrets
+.secrets.*
+*.pem
+*.key
+id_rsa
+id_ed25519
+credentials.json
+secrets.json
+
+# Runtime / local artifacts
+logs/
+**/logs/
+previews/
+**/previews/
+run/
+**/run/
+*.log
+*.png
+
+# Pico deploy scratch
+**/.flash/
+
+# IDE / OS
 .idea/
 .vscode/
-logs/
-*.log
+*.swp
+*~
+.DS_Store
+Thumbs.db
